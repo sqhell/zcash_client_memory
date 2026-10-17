@@ -445,6 +445,9 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
             orchard_commitments.extend(block_commitments.orchard.into_iter().map(Some));
         }
 
+        // Drop nullifier-map entries that can no longer be matched, as the upstream `put_blocks` does.
+        self.prune_tracked_nullifiers(PRUNING_DEPTH)?;
+
         if let Some((start_positions, last_scanned_height)) =
             start_positions.zip(last_scanned_height)
         {

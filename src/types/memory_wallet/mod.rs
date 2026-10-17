@@ -616,6 +616,28 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
             self.received_note_spends.insert_spend(note_id, spent_in);
         }
     }
+    /// Drops nullifier-map and transaction-locator entries mined below
+    /// `fully_scanned_height - pruning_depth`, matching `zcash_client_sqlite`'s
+    /// `prune_tracked_nullifiers`.
+    ///
+    /// The maps exist so that a note found by out-of-order scanning can be matched to a spend in a
+    /// block that was scanned earlier. Every block below the fully scanned height has been scanned,
+    /// so no undiscovered note can exist there, and once the height is also past reorg depth the
+    /// entries below it can never be looked up again. Without this, a historic sync keeps every
+    /// nullifier on chain in memory (and in the serialized wallet) for the life of the wallet.
+    pub(crate) fn prune_tracked_nullifiers(&mut self, pruning_depth: u32) -> Result<(), Error> {
+        if let Some(meta) = self.block_fully_scanned()? {
+            self.prune_nullifier_map_below(meta.block_height().saturating_sub(pruning_depth));
+        }
+        Ok(())
+    }
+
+    /// Removes every nullifier-map and transaction-locator entry mined below `cutoff`.
+    pub(crate) fn prune_nullifier_map_below(&mut self, cutoff: BlockHeight) {
+        self.tx_locator.0.retain(|(height, _), _| *height >= cutoff);
+        self.nullifiers.0.retain(|_, (height, _)| *height >= cutoff);
+    }
+
     pub(crate) fn insert_sapling_nullifier_map(
         &mut self,
         block_height: BlockHeight,
@@ -1253,5 +1275,50 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
     /// Returns the block_time for a given block height, if the block is in the wallet's cache
     pub fn get_block_time(&self, height: BlockHeight) -> Option<u32> {
         self.blocks.get(&height).map(|block| block.block_time)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zcash_protocol::consensus::Network;
+
+    fn sapling_nf(byte: u8) -> Nullifier {
+        Nullifier::Sapling(sapling::Nullifier([byte; 32]))
+    }
+
+    #[test]
+    fn prune_nullifier_map_below_keeps_entries_at_and_above_cutoff() {
+        let mut db = MemoryWalletDb::new(Network::TestNetwork, 100);
+        let txid = |b: u8| TxId::from_bytes([b; 32]);
+        for (height, byte) in [(100u32, 1u8), (199, 2), (200, 3), (201, 4), (500, 5)] {
+            db.insert_sapling_nullifier_map(
+                height.into(),
+                &[(
+                    TxIndex::from(byte as u16),
+                    txid(byte),
+                    vec![sapling::Nullifier([byte; 32])],
+                )],
+            )
+            .unwrap();
+        }
+        assert_eq!(db.nullifiers.0.len(), 5);
+        assert_eq!(db.tx_locator.0.len(), 5);
+
+        db.prune_nullifier_map_below(200.into());
+
+        assert!(db.nullifiers.get(&sapling_nf(1)).is_none());
+        assert!(db.nullifiers.get(&sapling_nf(2)).is_none());
+        assert_eq!(db.nullifiers.get(&sapling_nf(3)), Some(&(200.into(), 3)));
+        assert_eq!(db.nullifiers.get(&sapling_nf(4)), Some(&(201.into(), 4)));
+        assert_eq!(db.nullifiers.get(&sapling_nf(5)), Some(&(500.into(), 5)));
+        assert_eq!(
+            db.tx_locator
+                .0
+                .keys()
+                .map(|(h, _)| u32::from(*h))
+                .collect::<Vec<_>>(),
+            vec![200, 201, 500]
+        );
     }
 }
