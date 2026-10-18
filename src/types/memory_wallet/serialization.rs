@@ -272,10 +272,15 @@ impl<P: Parameters> MemoryWalletDb<P> {
                 .collect::<Result<_>>()?,
         );
 
-        wallet.scan_counters = proto_wallet
-            .scan_counters
-            .map(ScanCounters::try_from)
-            .transpose()?;
+        // A wallet saved before block pruning carries a record for every scanned block and no
+        // scan counters. Compute the counters from that complete block set and drop the records
+        // that are no longer needed, once, here; a wallet saved since is decoded as it was.
+        match proto_wallet.scan_counters {
+            Some(counters) => wallet.scan_counters = Some(ScanCounters::try_from(counters)?),
+            None => {
+                wallet.prune_blocks()?;
+            }
+        }
 
         Ok(wallet)
     }

@@ -395,13 +395,7 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
 
     fn get_block_hash(&self, block_height: BlockHeight) -> Result<Option<BlockHash>, Self::Error> {
         tracing::debug!("get_block_hash: {:?}", block_height);
-        Ok(self.blocks.iter().find_map(|b| {
-            if b.0 == &block_height {
-                Some(b.1.hash)
-            } else {
-                None
-            }
-        }))
+        Ok(self.blocks.get(&block_height).map(|block| block.hash))
     }
 
     fn block_metadata(&self, height: BlockHeight) -> Result<Option<BlockMetadata>, Self::Error> {
@@ -433,21 +427,21 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
     fn block_fully_scanned(&self) -> Result<Option<BlockMetadata>, Self::Error> {
         tracing::debug!("block_fully_scanned");
         if let Some(birthday_height) = self.get_wallet_birthday()? {
-            // We assume that the only way we get a contiguous range of block heights in the `blocks` table
-            // starting with the birthday block, is if all scanning operations have been performed on those
-            // blocks. This holds because the `blocks` table is only altered by `WalletDb::put_blocks` via
-            // `put_block`, and the effective combination of intra-range linear scanning and the nullifier
-            // map ensures that we discover all wallet-related information within the contiguous range.
+            // The scan queue is the authority on what has been scanned: `put_blocks` marks every
+            // range it stores as "Scanned", and the effective combination of intra-range linear
+            // scanning and the nullifier map ensures that we discover all wallet-related
+            // information within a scanned range. The block table cannot serve here, since
+            // records below the rewind window are pruned (see `prune_blocks`).
             //
-            // We also assume that every contiguous range of block heights in the `blocks` table has a
-            // single matching entry in the `scan_queue` table with priority "Scanned". This requires no
-            // bugs in the scan queue update logic, which we have had before. However, a bug here would
-            // mean that we return a more conservative fully-scanned height, which likely just causes a
+            // We assume that every contiguous run of scanned heights has a single matching entry
+            // in the scan queue with priority "Scanned". This requires no bugs in the scan queue
+            // update logic, which we have had before. However, a bug here would mean that we
+            // return a more conservative fully-scanned height, which likely just causes a
             // performance regression.
             //
-            // The fully-scanned height is therefore the last height that falls within the first range in
-            // the scan queue with priority "Scanned".
-            // SQL query problems.
+            // The fully-scanned height is therefore the last height that falls within the first
+            // range in the scan queue with priority "Scanned". Its block record is always
+            // retained, so the metadata lookup below finds it.
 
             let mut scanned_ranges: Vec<_> = self
                 .scan_queue

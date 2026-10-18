@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod pruning;
 mod serialization;
 
 use std::{
@@ -162,6 +163,11 @@ pub struct MemoryWalletDb<P: consensus::Parameters> {
     /// it set. Never serialized: a dirty wallet refuses to be encoded at all, and a decoded
     /// wallet is always clean. Not part of `PartialEq`.
     dirty: Option<&'static str>,
+
+    /// Test-only: when set, `put_blocks` leaves its block records unpruned so that a test can
+    /// compare the wallet before and after [`Self::prune_blocks`]. Never serialized.
+    #[cfg(test)]
+    pub(crate) defer_block_pruning: bool,
 }
 
 impl<P: consensus::Parameters + PartialEq> PartialEq for MemoryWalletDb<P> {
@@ -233,7 +239,23 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
             transparent_spend_map: TransparentSpendCache::new(),
             transaction_data_request_queue: TransactionDataRequestQueue::new(),
             dirty: None,
+            #[cfg(test)]
+            defer_block_pruning: false,
         }
+    }
+
+    /// Whether `put_blocks` prunes block records when it is done: always, except in a test that
+    /// deferred pruning.
+    #[cfg(not(test))]
+    pub(crate) fn prunes_blocks_after_put(&self) -> bool {
+        true
+    }
+
+    /// Whether `put_blocks` prunes block records when it is done: always, except in a test that
+    /// deferred pruning.
+    #[cfg(test)]
+    pub(crate) fn prunes_blocks_after_put(&self) -> bool {
+        !self.defer_block_pruning
     }
 
     pub fn params(&self) -> &P {
@@ -928,6 +950,10 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         Ok(())
     }
 
+    /// The lowest and highest heights that still have a block record, or `None` if there is
+    /// none. Records below the rewind window are pruned (see [`Self::prune_blocks`]), so the
+    /// lower bound is whichever old record happens to be retained, not the first scanned block;
+    /// only the upper bound, the highest scanned height, carries meaning.
     pub(crate) fn block_height_extrema(&self) -> Option<RangeInclusive<BlockHeight>> {
         let (min, max) = self.blocks.keys().fold((None, None), |(min, max), height| {
             (

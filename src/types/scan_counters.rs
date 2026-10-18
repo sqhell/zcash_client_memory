@@ -78,6 +78,16 @@ impl ScanCounters {
         })
     }
 
+    /// The exclusive lower bound of the counted heights.
+    pub(crate) fn counted_above(&self) -> BlockHeight {
+        self.counted_above
+    }
+
+    /// The inclusive upper bound of the counted heights.
+    pub(crate) fn counted_through(&self) -> BlockHeight {
+        self.counted_through
+    }
+
     /// The totals over the counted heights.
     pub(crate) fn counts(&self) -> ScanCounts {
         self.counts

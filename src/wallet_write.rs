@@ -944,6 +944,12 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
             )?;
         }
 
+        // Drop the block records that nothing will read again, now that the scan queue says
+        // which heights a resumed scan will connect to.
+        if self.prunes_blocks_after_put() {
+            self.prune_blocks()?;
+        }
+
         Ok(())
     }
     /// Adds a transparent UTXO received by the wallet to the data store.
