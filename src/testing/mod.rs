@@ -22,7 +22,10 @@ use zcash_protocol::{
 
 use shardtree::store::ShardStore;
 
-use crate::{Account, AccountId, Error, MemBlockCache, MemoryWalletDb, SentNoteId};
+use crate::{
+    Account, AccountId, EncodeContext, Error, MemBlockCache, MemoryWalletDb, PeekedMeta,
+    SentNoteId, peek_meta,
+};
 
 #[cfg(feature = "transparent-inputs")]
 use {
@@ -488,6 +491,45 @@ where
             bytes,
             "re-encoding the decoded wallet must reproduce the original blob"
         );
+
+        // The same state must survive the format v2 envelope, header and checksum included,
+        // and come back with the lineage the save recorded. The recovered wallet is the one
+        // saved because a save advances the lineage and this harness only borrows `self`.
+        let mut recovered_wallet = recovered_wallet;
+        let envelope = recovered_wallet
+            .encode_with_meta(EncodeContext {
+                now_ms: 1_700_000_000_000,
+                writer_id: "test-harness",
+            })
+            .unwrap();
+        let from_envelope = MemoryWalletDb::decode_new(&envelope[..], self.params.clone(), 100)
+            .expect("the wallet decodes from its own envelope");
+        assert_eq!(self, &from_envelope);
+        assert_eq!(from_envelope.loaded_format_version(), Some(2));
+        assert_eq!(from_envelope.lineage(), recovered_wallet.lineage());
+        assert_eq!(from_envelope.lineage().save_seq(), 1);
+        assert_eq!(
+            from_envelope.encode_to_vec().unwrap(),
+            bytes,
+            "the wallet decoded from the envelope must encode to the original body"
+        );
+        match peek_meta(&envelope).unwrap() {
+            PeekedMeta::V2(meta) => {
+                assert_eq!(meta.lineage(), from_envelope.lineage());
+                assert_eq!(meta.birthday_height(), self.wallet_birthday());
+                assert_eq!(
+                    meta.fully_scanned_height(),
+                    self.fully_scanned_height().unwrap()
+                );
+                assert_eq!(meta.max_scanned_height(), self.max_scanned_height());
+                assert_eq!(meta.chain_tip_height(), self.chain_tip_height().unwrap());
+                assert_eq!(
+                    usize::try_from(meta.blocks_retained()).unwrap(),
+                    self.blocks.len()
+                );
+            }
+            PeekedMeta::V1(_) => panic!("an envelope peeks as V2"),
+        }
 
         // ensure the trees can be roundtripped
         use crate::wallet_commitment_trees::serialization::{tree_from_protobuf, tree_to_protobuf};

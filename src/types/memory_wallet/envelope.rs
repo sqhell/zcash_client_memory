@@ -20,7 +20,8 @@
 use bytes::Buf;
 use prost::Message;
 use sha2::{Digest, Sha256};
-use zcash_protocol::consensus::{BlockHeight, NetworkType, Parameters};
+use zcash_keys::keys::UnifiedFullViewingKey;
+use zcash_protocol::consensus::{BlockHeight, MainNetwork, NetworkType, Parameters};
 
 use super::{Lineage, MemoryWalletDb};
 use crate::error::{Error, Result};
@@ -245,9 +246,29 @@ impl LegacyMeta {
         self.birthday_height
     }
 
-    /// The encoded unified full viewing key of every account, in account id order.
+    /// The unified full viewing key of every account, in account id order, as the body
+    /// stores them: encoded for mainnet whatever network the wallet is for, since a v1 blob
+    /// does not say which. [`Self::account_ufvks_for`] re-encodes them for a known network,
+    /// which is what a [`WalletMeta`] header and [`AccountIdentity::ufvk`] report.
+    ///
+    /// [`AccountIdentity::ufvk`]: super::AccountIdentity::ufvk
     pub fn account_ufvks(&self) -> &[String] {
         &self.account_ufvks
+    }
+
+    /// The unified full viewing key of every account, in account id order, encoded for the
+    /// network `params` describes.
+    ///
+    /// Fails with [`Error::UfvkDecodeError`] if a stored key does not parse.
+    pub fn account_ufvks_for<P: Parameters>(&self, params: &P) -> Result<Vec<String>> {
+        self.account_ufvks
+            .iter()
+            .map(|ufvk| {
+                UnifiedFullViewingKey::decode(&MainNetwork, ufvk)
+                    .map(|key| key.encode(params))
+                    .map_err(Error::UfvkDecodeError)
+            })
+            .collect()
     }
 
     /// The chain tip height the wallet had last been told about, or `None` before the first
@@ -460,5 +481,301 @@ impl<P: Parameters> MemoryWalletDb<P> {
             body_len,
             blocks_retained: u32::try_from(self.blocks.len())?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use secrecy::SecretVec;
+    use zcash_client_backend::data_api::{AccountBirthday, WalletWrite};
+    use zcash_primitives::block::BlockHash;
+    use zcash_protocol::consensus::Network;
+
+    use super::*;
+    use crate::error::Error;
+
+    /// A wallet with one derived account and a chain tip, so that every header field has
+    /// something to say.
+    fn wallet(network: Network) -> MemoryWalletDb<Network> {
+        let mut db = MemoryWalletDb::new(network, 100);
+        db.create_account(
+            "primary",
+            &SecretVec::new(vec![7u8; 32]),
+            &AccountBirthday::from_sapling_activation(&network, BlockHash([0; 32])),
+            None,
+        )
+        .unwrap();
+        db.update_chain_tip(BlockHeight::from(1_000_000)).unwrap();
+        db
+    }
+
+    fn ctx(now_ms: u64, writer_id: &str) -> EncodeContext<'_> {
+        EncodeContext { now_ms, writer_id }
+    }
+
+    /// The header read from a blob, with the body digest fields cleared so that it compares
+    /// equal to a header built from a live wallet.
+    fn peeked_v2_without_digest(bytes: &[u8]) -> WalletMeta {
+        match peek_meta(bytes).unwrap() {
+            PeekedMeta::V2(mut meta) => {
+                assert!(meta.body_sha256().is_some());
+                assert!(meta.body_len().is_some());
+                meta.body_sha256 = None;
+                meta.body_len = None;
+                meta
+            }
+            PeekedMeta::V1(_) => panic!("an envelope peeks as V2"),
+        }
+    }
+
+    #[test]
+    fn meta_round_trips_through_the_envelope() {
+        let mut db = wallet(Network::TestNetwork);
+        assert_eq!(db.loaded_format_version(), None);
+        assert_eq!(db.lineage(), &Lineage::default());
+
+        let bytes = db
+            .encode_with_meta(ctx(1_700_000_000_000, "writer-a"))
+            .unwrap();
+        assert!(bytes.starts_with(&MAGIC));
+
+        let decoded = MemoryWalletDb::decode_new(&bytes[..], Network::TestNetwork, 100).unwrap();
+        assert_eq!(decoded, db);
+        assert_eq!(decoded.loaded_format_version(), Some(2));
+        assert_eq!(decoded.lineage(), db.lineage());
+        assert_eq!(decoded.lineage().save_seq(), 1);
+        assert_eq!(decoded.lineage().created_at_ms(), 1_700_000_000_000);
+        assert_eq!(decoded.lineage().saved_at_ms(), 1_700_000_000_000);
+        assert_eq!(decoded.lineage().writer_id(), "writer-a");
+
+        // The header describes the wallet the body decodes to.
+        let peeked = peeked_v2_without_digest(&bytes);
+        assert_eq!(peeked, decoded.meta().unwrap());
+        assert_eq!(peeked, db.meta().unwrap());
+        assert_eq!(peeked.schema_version(), SCHEMA_VERSION);
+        assert_eq!(peeked.network(), "test");
+        assert_eq!(peeked.birthday_height(), db.wallet_birthday());
+        assert_eq!(
+            peeked.chain_tip_height(),
+            Some(BlockHeight::from(1_000_000))
+        );
+        assert_eq!(peeked.max_scanned_height(), None);
+        assert_eq!(peeked.fully_scanned_height(), None);
+        assert_eq!(peeked.account_count(), 1);
+        let identities = db.account_identities();
+        assert_eq!(peeked.account_ufvks(), [identities[0].ufvk().to_owned()]);
+        assert_eq!(peeked.seed_fingerprint(), identities[0].seed_fingerprint());
+        assert!(peeked.seed_fingerprint().is_some());
+        assert_eq!(peeked.blocks_retained(), 0);
+
+        // The digest in the header is the digest of the body that follows it.
+        let PeekedMeta::V2(header) = peek_meta(&bytes).unwrap() else {
+            unreachable!()
+        };
+        let body_len = usize::try_from(header.body_len().unwrap()).unwrap();
+        let body = &bytes[bytes.len() - body_len..];
+        assert_eq!(
+            header.body_sha256().unwrap(),
+            <[u8; 32]>::from(Sha256::digest(body))
+        );
+        assert_eq!(proto::MemoryWallet::decode(body).unwrap().version, 2);
+
+        // A re-save of the decoded wallet continues the lineage it was decoded with.
+        let mut decoded = decoded;
+        let again = decoded
+            .encode_with_meta(ctx(1_700_000_000_500, "writer-b"))
+            .unwrap();
+        let peeked = peeked_v2_without_digest(&again);
+        assert_eq!(peeked.lineage().save_seq(), 2);
+        assert_eq!(peeked.lineage().created_at_ms(), 1_700_000_000_000);
+        assert_eq!(peeked.lineage().saved_at_ms(), 1_700_000_000_500);
+        assert_eq!(peeked.lineage().writer_id(), "writer-b");
+    }
+
+    #[test]
+    fn each_save_advances_the_sequence_and_the_first_fixes_the_creation_time() {
+        let mut db = wallet(Network::TestNetwork);
+        let first = db.encode_with_meta(ctx(10, "w")).unwrap();
+        let second = db.encode_with_meta(ctx(20, "w")).unwrap();
+        let third = db.encode_with_meta(ctx(30, "w")).unwrap();
+
+        for (bytes, seq, saved_at) in [(&first, 1, 10), (&second, 2, 20), (&third, 3, 30)] {
+            let meta = peeked_v2_without_digest(bytes);
+            assert_eq!(meta.lineage().save_seq(), seq);
+            assert_eq!(meta.lineage().created_at_ms(), 10);
+            assert_eq!(meta.lineage().saved_at_ms(), saved_at);
+        }
+        assert_eq!(db.lineage().save_seq(), 3);
+        assert_eq!(db.lineage().created_at_ms(), 10);
+        assert_eq!(db.lineage().saved_at_ms(), 30);
+    }
+
+    #[test]
+    fn a_v1_blob_still_decodes_and_peeks() {
+        let db = wallet(Network::TestNetwork);
+        let bytes = db.encode_to_vec().unwrap();
+        assert_eq!(&bytes[..2], &[0x08, 0x01]);
+
+        let decoded = MemoryWalletDb::decode_new(&bytes[..], Network::TestNetwork, 100).unwrap();
+        assert_eq!(decoded, db);
+        assert_eq!(decoded.loaded_format_version(), Some(1));
+        assert_eq!(decoded.lineage(), &Lineage::default());
+
+        let PeekedMeta::V1(legacy) = peek_meta(&bytes).unwrap() else {
+            panic!("a bare body peeks as V1")
+        };
+        assert_eq!(legacy.birthday_height(), db.wallet_birthday());
+        assert!(legacy.birthday_height().is_some());
+        // The body stores keys in the mainnet encoding whatever the network; re-encoded for
+        // the wallet's network they match what the wallet reports.
+        let identity = &db.account_identities()[0];
+        assert_eq!(
+            legacy.account_ufvks(),
+            [
+                UnifiedFullViewingKey::decode(&Network::TestNetwork, identity.ufvk())
+                    .unwrap()
+                    .encode(&MainNetwork)
+            ]
+        );
+        assert_eq!(
+            legacy.account_ufvks_for(&Network::TestNetwork).unwrap(),
+            [identity.ufvk().to_owned()]
+        );
+        assert_eq!(
+            legacy.chain_tip_height(),
+            Some(BlockHeight::from(1_000_000))
+        );
+
+        // An empty wallet has nothing to say, but still peeks.
+        let empty = MemoryWalletDb::new(Network::TestNetwork, 100)
+            .encode_to_vec()
+            .unwrap();
+        let PeekedMeta::V1(legacy) = peek_meta(&empty).unwrap() else {
+            panic!("a bare body peeks as V1")
+        };
+        assert_eq!(legacy.birthday_height(), None);
+        assert!(legacy.account_ufvks().is_empty());
+        assert_eq!(legacy.chain_tip_height(), None);
+    }
+
+    #[test]
+    fn a_body_of_the_wrong_version_for_its_format_is_rejected() {
+        let db = wallet(Network::TestNetwork);
+        let mut body = proto::MemoryWallet::try_from(&db).unwrap();
+        body.version = BODY_VERSION_V2;
+        let bare_v2 = body.encode_to_vec();
+        assert!(matches!(
+            MemoryWalletDb::decode_new(&bare_v2[..], Network::TestNetwork, 100),
+            Err(Error::UnsupportedProtoVersion(1, 2))
+        ));
+        assert!(matches!(
+            peek_meta(&bare_v2),
+            Err(Error::UnsupportedProtoVersion(1, 2))
+        ));
+    }
+
+    #[test]
+    fn a_corrupted_body_is_rejected_by_its_checksum() {
+        let mut db = wallet(Network::TestNetwork);
+        let bytes = db.encode_with_meta(ctx(1, "w")).unwrap();
+        let header_len =
+            usize::try_from(u32::from_le_bytes(bytes[4..8].try_into().unwrap())).unwrap();
+        let body_start = ENVELOPE_PREFIX_LEN + header_len;
+
+        // Flipping a byte anywhere in the body fails the checksum, whether or not the body
+        // still decodes as protobuf.
+        for offset in [body_start, (body_start + bytes.len()) / 2, bytes.len() - 1] {
+            let mut corrupted = bytes.clone();
+            corrupted[offset] ^= 0x55;
+            assert!(
+                matches!(
+                    MemoryWalletDb::decode_new(&corrupted[..], Network::TestNetwork, 100),
+                    Err(Error::ChecksumMismatch)
+                ),
+                "a flipped byte at {offset} must fail the checksum"
+            );
+        }
+    }
+
+    #[test]
+    fn a_blob_from_another_network_is_rejected() {
+        let mut main = wallet(Network::MainNetwork);
+        let bytes = main.encode_with_meta(ctx(1, "w")).unwrap();
+        assert!(matches!(
+            MemoryWalletDb::decode_new(&bytes[..], Network::TestNetwork, 100),
+            Err(Error::NetworkMismatch { expected, found }) if expected == "test" && found == "main"
+        ));
+
+        let mut test = wallet(Network::TestNetwork);
+        let bytes = test.encode_with_meta(ctx(1, "w")).unwrap();
+        assert!(matches!(
+            MemoryWalletDb::decode_new(&bytes[..], Network::MainNetwork, 100),
+            Err(Error::NetworkMismatch { expected, found }) if expected == "main" && found == "test"
+        ));
+    }
+
+    #[test]
+    fn a_truncated_envelope_is_rejected_cleanly() {
+        let mut db = wallet(Network::TestNetwork);
+        let bytes = db.encode_with_meta(ctx(1, "w")).unwrap();
+
+        // The header length points past the end of the buffer.
+        let mut oversized = bytes.clone();
+        oversized[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(
+            MemoryWalletDb::decode_new(&oversized[..], Network::TestNetwork, 100),
+            Err(Error::CorruptedData(_))
+        ));
+        assert!(matches!(
+            peek_meta(&oversized),
+            Err(Error::CorruptedData(_))
+        ));
+
+        // The buffer ends inside the fixed prefix, inside the header, and inside the body.
+        for len in [4, 6, 12, bytes.len() - 1] {
+            assert!(
+                matches!(
+                    MemoryWalletDb::decode_new(&bytes[..len], Network::TestNetwork, 100),
+                    Err(Error::CorruptedData(_))
+                ),
+                "a blob cut at {len} bytes must be rejected"
+            );
+        }
+        assert!(matches!(
+            peek_meta(&bytes[..6]),
+            Err(Error::CorruptedData(_))
+        ));
+
+        // Trailing bytes after the body are not a valid blob either.
+        let mut padded = bytes.clone();
+        padded.push(0);
+        assert!(matches!(
+            MemoryWalletDb::decode_new(&padded[..], Network::TestNetwork, 100),
+            Err(Error::CorruptedData(_))
+        ));
+    }
+
+    #[test]
+    fn a_dirty_wallet_refuses_to_save_and_keeps_its_lineage() {
+        let mut db = wallet(Network::TestNetwork);
+        db.encode_with_meta(ctx(1, "w")).unwrap();
+        let _ = db.mutate("put_blocks", |_| Err::<(), _>(Error::NonSequentialBlocks));
+        assert!(matches!(
+            db.encode_with_meta(ctx(2, "w")),
+            Err(Error::DirtyState("put_blocks"))
+        ));
+        assert_eq!(db.lineage().save_seq(), 1);
+        assert_eq!(db.lineage().saved_at_ms(), 1);
+    }
+
+    #[test]
+    fn a_fresh_wallet_meta_has_no_body_digest() {
+        let db = MemoryWalletDb::new(Network::MainNetwork, 100);
+        let meta = db.meta().unwrap();
+        assert_eq!(meta.network(), "main");
+        assert_eq!(meta.body_sha256(), None);
+        assert_eq!(meta.body_len(), None);
+        assert_eq!(meta.account_count(), 0);
+        assert_eq!(meta.lineage(), &Lineage::default());
     }
 }
