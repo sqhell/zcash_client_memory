@@ -236,3 +236,28 @@ fn sync_state_accessors() {
 fn truncate_drops_nullifier_map_entries_above_the_height() {
     testing::pool::truncate_drops_nullifier_map_entries_above_the_height::<OrchardPoolTester>()
 }
+
+#[test]
+fn prune_preserves_reads() {
+    testing::pool::prune_preserves_reads::<OrchardPoolTester>()
+}
+
+#[test]
+fn prune_counters_match_block_sums() {
+    testing::pool::prune_counters_match_block_sums::<OrchardPoolTester>()
+}
+
+#[test]
+fn scan_counters_survive_truncation() {
+    testing::pool::scan_counters_survive_truncation::<OrchardPoolTester>()
+}
+
+#[test]
+fn pre_pruning_wallet_is_migrated_on_decode() {
+    testing::pool::pre_pruning_wallet_is_migrated_on_decode::<OrchardPoolTester>()
+}
+
+#[test]
+fn pruned_block_table_stays_small() {
+    testing::pool::pruned_block_table_stays_small::<OrchardPoolTester>()
+}

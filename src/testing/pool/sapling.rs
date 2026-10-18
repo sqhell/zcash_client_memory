@@ -215,3 +215,28 @@ fn sync_state_accessors() {
 fn truncate_drops_nullifier_map_entries_above_the_height() {
     testing::pool::truncate_drops_nullifier_map_entries_above_the_height::<SaplingPoolTester>()
 }
+
+#[test]
+fn prune_preserves_reads() {
+    testing::pool::prune_preserves_reads::<SaplingPoolTester>()
+}
+
+#[test]
+fn prune_counters_match_block_sums() {
+    testing::pool::prune_counters_match_block_sums::<SaplingPoolTester>()
+}
+
+#[test]
+fn scan_counters_survive_truncation() {
+    testing::pool::scan_counters_survive_truncation::<SaplingPoolTester>()
+}
+
+#[test]
+fn pre_pruning_wallet_is_migrated_on_decode() {
+    testing::pool::pre_pruning_wallet_is_migrated_on_decode::<SaplingPoolTester>()
+}
+
+#[test]
+fn pruned_block_table_stays_small() {
+    testing::pool::pruned_block_table_stays_small::<SaplingPoolTester>()
+}

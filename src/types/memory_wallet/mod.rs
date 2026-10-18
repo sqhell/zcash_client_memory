@@ -1277,7 +1277,7 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
     /// The output and action counts of every scanned block above `birthday_height`: the
     /// persisted counters for the heights whose block records may have been pruned, plus the
     /// retained block records outside the counted run.
-    fn scanned_counts_above(&self, birthday_height: BlockHeight) -> ScanCounts {
+    pub(crate) fn scanned_counts_above(&self, birthday_height: BlockHeight) -> ScanCounts {
         let mut total = self
             .scan_counters
             .map_or_else(ScanCounts::default, |counters| counters.counts());
