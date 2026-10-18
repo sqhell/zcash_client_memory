@@ -56,6 +56,22 @@ message MemoryWallet {
   ShardTree ironwood_tree = 19;
   // the block heights corresponding to the last note commitment for each shard in the ironwood tree
   repeated TreeEndHeightsRecord ironwood_tree_shard_end_heights = 20;
+
+  // Totals of the per-block output and action counts over the run of fully scanned heights whose
+  // block records may have been pruned. Absent in wallets saved before block pruning, which
+  // compute it from their (complete) block records on decode.
+  ScanCounters scan_counters = 21;
+}
+
+// Running totals of the per-block Sapling output and Orchard and Ironwood action counts over the
+// contiguous run of heights (counted_above, counted_through]. The wallet prunes the block records
+// of those heights and reports scan progress from these totals instead.
+message ScanCounters {
+  uint32 counted_above = 1; // exclusive lower bound of the counted heights
+  uint32 counted_through = 2; // inclusive upper bound of the counted heights
+  uint64 sapling_outputs = 3; // Sapling outputs in the counted blocks
+  uint64 orchard_actions = 4; // Orchard actions in the counted blocks
+  uint64 ironwood_actions = 5; // Ironwood actions in the counted blocks
 }
 
 message Accounts {

@@ -272,6 +272,11 @@ impl<P: Parameters> MemoryWalletDb<P> {
                 .collect::<Result<_>>()?,
         );
 
+        wallet.scan_counters = proto_wallet
+            .scan_counters
+            .map(ScanCounters::try_from)
+            .transpose()?;
+
         Ok(wallet)
     }
 }
@@ -466,6 +471,8 @@ impl<P: Parameters> TryFrom<&MemoryWalletDb<P>> for proto::MemoryWallet {
                 .iter()
                 .map(Into::into)
                 .collect(),
+
+            scan_counters: wallet.scan_counters.as_ref().map(proto::ScanCounters::from),
         })
     }
 }

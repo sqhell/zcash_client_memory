@@ -479,6 +479,32 @@ pub struct MemoryWallet {
     /// the block heights corresponding to the last note commitment for each shard in the ironwood tree
     #[prost(message, repeated, tag = "20")]
     pub ironwood_tree_shard_end_heights: ::prost::alloc::vec::Vec<TreeEndHeightsRecord>,
+    /// Totals of the per-block output and action counts over the run of fully scanned heights whose
+    /// block records may have been pruned. Absent in wallets saved before block pruning, which
+    /// compute it from their (complete) block records on decode.
+    #[prost(message, optional, tag = "21")]
+    pub scan_counters: ::core::option::Option<ScanCounters>,
+}
+/// Running totals of the per-block Sapling output and Orchard and Ironwood action counts over the
+/// contiguous run of heights (counted_above, counted_through]. The wallet prunes the block records
+/// of those heights and reports scan progress from these totals instead.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ScanCounters {
+    /// exclusive lower bound of the counted heights
+    #[prost(uint32, tag = "1")]
+    pub counted_above: u32,
+    /// inclusive upper bound of the counted heights
+    #[prost(uint32, tag = "2")]
+    pub counted_through: u32,
+    /// Sapling outputs in the counted blocks
+    #[prost(uint64, tag = "3")]
+    pub sapling_outputs: u64,
+    /// Orchard actions in the counted blocks
+    #[prost(uint64, tag = "4")]
+    pub orchard_actions: u64,
+    /// Ironwood actions in the counted blocks
+    #[prost(uint64, tag = "5")]
+    pub ironwood_actions: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Accounts {

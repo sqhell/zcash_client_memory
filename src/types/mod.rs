@@ -4,6 +4,7 @@ pub(crate) mod data_requests;
 pub(crate) mod memory_wallet;
 pub mod notes;
 pub(crate) mod nullifier;
+pub(crate) mod scan_counters;
 pub(crate) mod scanning;
 pub mod transaction;
 pub(crate) mod transparent;
@@ -14,6 +15,7 @@ pub(crate) use block::*;
 pub(crate) use data_requests::*;
 pub use memory_wallet::*;
 pub(crate) use nullifier::*;
+pub(crate) use scan_counters::*;
 
 // Re-export types needed for transaction history feature
 pub use notes::{ReceivedNote, ReceivedNoteTable, SentNote, SentNoteTable};

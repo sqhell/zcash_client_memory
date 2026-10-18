@@ -153,6 +153,9 @@ pub struct MemoryWalletDb<P: consensus::Parameters> {
     pub(crate) transaction_data_request_queue: TransactionDataRequestQueue,
     /// Queue of block ranges that should be scanned along with their priority
     pub(crate) scan_queue: ScanQueue,
+    /// The output and action counts of the fully scanned heights whose block records
+    /// [`Self::prune_blocks`] may have dropped, or `None` if no height has been counted yet.
+    pub(crate) scan_counters: Option<ScanCounters>,
 
     /// The name of the write operation that failed part-way, if any. Set by [`Self::mutate`]
     /// for the duration of an operation and cleared only when it succeeds, so an error leaves
@@ -193,6 +196,7 @@ impl<P: consensus::Parameters + PartialEq> PartialEq for MemoryWalletDb<P> {
             && self.sent_notes == other.sent_notes
             && self.tx_locator == other.tx_locator
             && self.scan_queue == other.scan_queue
+            && self.scan_counters == other.scan_counters
             && self.sapling_tree_shard_end_heights == other.sapling_tree_shard_end_heights
             && orchard_comparisons
             && transparent_comparisons
@@ -223,6 +227,7 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
             tx_locator: TxLocatorMap::new(),
             received_note_spends: ReceievedNoteSpends::new(),
             scan_queue: ScanQueue::new(),
+            scan_counters: None,
             transparent_received_outputs: TransparentReceivedOutputs::new(),
             transparent_received_output_spends: TransparentReceivedOutputSpends::new(),
             transparent_spend_map: TransparentSpendCache::new(),
@@ -1243,24 +1248,35 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         &self.sent_notes
     }
 
+    /// The output and action counts of every scanned block above `birthday_height`: the
+    /// persisted counters for the heights whose block records may have been pruned, plus the
+    /// retained block records outside the counted run.
+    fn scanned_counts_above(&self, birthday_height: BlockHeight) -> ScanCounts {
+        let mut total = self
+            .scan_counters
+            .map_or_else(ScanCounts::default, |counters| counters.counts());
+        for (height, block) in &self.blocks {
+            let counted = self
+                .scan_counters
+                .is_some_and(|counters| counters.covers(*height));
+            if *height > birthday_height && !counted {
+                total = total + ScanCounts::of_block(block);
+            }
+        }
+        total
+    }
+
     pub(crate) fn sapling_scan_progress(
         &self,
         birthday_height: &BlockHeight,
         fully_scanned_height: &BlockHeight,
         chain_tip_height: &BlockHeight,
     ) -> Result<Option<Ratio<u64>>, Error> {
+        // The total outputs scanned so far above the birthday height.
+        let scanned_count = self.scanned_counts_above(*birthday_height).sapling_outputs;
+
         if fully_scanned_height == chain_tip_height {
-            let outputs_sum = self
-                .blocks
-                .iter()
-                .filter(|(height, _)| height >= &birthday_height)
-                .fold(0, |sum, (_, block)| {
-                    sum + block.sapling_output_count.unwrap_or(0)
-                });
-            Ok(Some(Ratio::new(
-                u64::from(outputs_sum),
-                u64::from(outputs_sum),
-            )))
+            Ok(Some(Ratio::new(scanned_count, scanned_count)))
         } else {
             // Get the starting note commitment tree size from the wallet birthday, or failing that
             // from the blocks table.
@@ -1286,15 +1302,6 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
                             )
                         })
                         .max()
-                });
-
-            // Compute the total blocks scanned so far above the starting height
-            let scanned_count = self
-                .blocks
-                .iter()
-                .filter(|(height, _)| height > &birthday_height)
-                .fold(0_u64, |acc, (_, block)| {
-                    acc + u64::from(block.sapling_output_count.unwrap_or(0))
                 });
 
             // We don't have complete information on how many outputs will exist in the shard at
@@ -1368,6 +1375,14 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
             orchard::ValuePool::Orchard => block.orchard_action_count.unwrap_or(0),
             orchard::ValuePool::Ironwood => block.ironwood_action_count.unwrap_or(0),
         };
+        // The total actions scanned so far above the birthday height.
+        let scanned_count = {
+            let counts = self.scanned_counts_above(*birthday_height);
+            match pool {
+                orchard::ValuePool::Orchard => counts.orchard_actions,
+                orchard::ValuePool::Ironwood => counts.ironwood_actions,
+            }
+        };
         let tree_size = |block: &MemoryWalletBlock| match pool {
             orchard::ValuePool::Orchard => block.orchard_commitment_tree_size.unwrap_or(0),
             orchard::ValuePool::Ironwood => block.ironwood_commitment_tree_size.unwrap_or(0),
@@ -1378,15 +1393,7 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         };
 
         if fully_scanned_height == chain_tip_height {
-            let outputs_sum = self
-                .blocks
-                .iter()
-                .filter(|(height, _)| height >= &birthday_height)
-                .fold(0, |sum, (_, block)| sum + action_count(block));
-            Ok(Some(Ratio::new(
-                u64::from(outputs_sum),
-                u64::from(outputs_sum),
-            )))
+            Ok(Some(Ratio::new(scanned_count, scanned_count)))
         } else {
             // Get the starting note commitment tree size from the wallet birthday, or failing that
             // from the blocks table.
@@ -1416,15 +1423,6 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
                         .filter(|(height, _)| height <= &birthday_height)
                         .map(|(_, block)| u64::from(tree_size(block) - action_count(block)))
                         .max()
-                });
-
-            // Compute the total blocks scanned so far above the starting height
-            let scanned_count = self
-                .blocks
-                .iter()
-                .filter(|(height, _)| height > &birthday_height)
-                .fold(0_u64, |acc, (_, block)| {
-                    acc + u64::from(action_count(block))
                 });
 
             // We don't have complete information on how many outputs will exist in the shard at
