@@ -90,6 +90,16 @@ impl ReceivedNote {
     pub fn account_id(&self) -> AccountId {
         self.account_id
     }
+    /// Whether this note was recorded as change of a transaction the wallet built, or was
+    /// found alongside a spend from the same account while scanning.
+    pub fn is_change(&self) -> bool {
+        self.is_change
+    }
+    /// The key scope the note was received under, when known. `Scope::Internal` marks change
+    /// even for notes whose `is_change` flag was not set at the time they were recorded.
+    pub fn recipient_key_scope(&self) -> Option<Scope> {
+        self.recipient_key_scope
+    }
     pub(crate) fn nullifier(&self) -> Option<&Nullifier> {
         self.nf.as_ref()
     }

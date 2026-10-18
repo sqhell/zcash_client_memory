@@ -1476,6 +1476,14 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         &self.tx_table
     }
 
+    /// Iterates over the wallet's spend records: each received note that is known to be spent,
+    /// paired with the transaction that spends it. Spends are recorded both when the wallet
+    /// builds a transaction and when scanning detects one, so this covers transactions created
+    /// elsewhere with the same keys.
+    pub fn received_note_spends(&self) -> impl Iterator<Item = (&NoteId, &TxId)> + '_ {
+        self.received_note_spends.0.iter()
+    }
+
     /// Returns the block_time for a given block height, if the block is in the wallet's cache
     pub fn get_block_time(&self, height: BlockHeight) -> Option<u32> {
         self.blocks.get(&height).map(|block| block.block_time)
