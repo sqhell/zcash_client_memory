@@ -69,6 +69,9 @@ impl TransactionEntry {
         }
     }
 
+    /// The transaction's index within its block, if known. Read by the transparent coinbase
+    /// filter, which treats index 0 as coinbase.
+    #[cfg(feature = "transparent-inputs")]
     pub(crate) fn tx_index(&self) -> Option<u32> {
         self.tx_index
     }
@@ -109,16 +112,6 @@ impl TransactionTable {
 
     pub(crate) fn get_transaction(&self, txid: &TxId) -> Option<&TransactionEntry> {
         self.0.get(txid)
-    }
-
-    pub(crate) fn get_by_height_and_index(
-        &self,
-        height: BlockHeight,
-        index: u32,
-    ) -> Option<&TransactionEntry> {
-        self.0
-            .values()
-            .find(|entry| entry.block == Some(height) && entry.tx_index == Some(index))
     }
 
     /// Inserts information about a MINED transaction that was observed to

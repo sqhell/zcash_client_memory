@@ -21,8 +21,8 @@ use shardtree::{
 use zcash_client_backend::wallet::TransparentAddressMetadata;
 use zcash_client_backend::{
     data_api::{
-        Account as _, AccountBirthday, AccountSource, InputSource, Ratio, SAPLING_SHARD_HEIGHT,
-        TransactionStatus, WalletRead,
+        Account as _, AccountBirthday, AccountSource, InputSource, NullifierQuery, Ratio,
+        SAPLING_SHARD_HEIGHT, TransactionStatus, WalletRead,
         scanning::{ScanPriority, ScanRange},
         wallet::{ConfirmationsPolicy, TargetHeight},
     },
@@ -452,6 +452,43 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
     /// Returns true if the note is in the spent notes table and the transaction that spent it is
     /// in the transaction table and has either been mined or can be mined in the future
     /// (i.e. it hasn't or will not expire)
+    /// Returns, for every received note whose nullifier `select` accepts, the account that
+    /// received the note together with the selected nullifier.
+    ///
+    /// For [`NullifierQuery::Unspent`], notes with an effective spend (see
+    /// [`Self::spend_is_effective`]) are omitted. The wallet's spend record is consulted rather
+    /// than the chain nullifier map: that map is pruned below the fully scanned height, so its
+    /// absence of an entry cannot distinguish an unspent note from one spent long ago.
+    pub(crate) fn select_nullifiers<N>(
+        &self,
+        query: NullifierQuery,
+        select: impl Fn(Option<&Nullifier>) -> Option<N>,
+    ) -> Vec<(AccountId, N)> {
+        self.received_notes
+            .iter()
+            .filter_map(|note| {
+                let nf = select(note.nullifier())?;
+                match query {
+                    NullifierQuery::All => Some((note.account_id(), nf)),
+                    NullifierQuery::Unspent => (!self.spend_is_effective(&note.note_id()))
+                        .then_some((note.account_id(), nf)),
+                }
+            })
+            .collect()
+    }
+
+    /// Whether the note has a recorded spend that expiry cannot undo: the spending transaction
+    /// is mined, or has no expiry height. A spend by an unmined transaction that can still
+    /// expire is not effective, so the note's nullifier keeps being watched for.
+    pub(crate) fn spend_is_effective(&self, note_id: &NoteId) -> bool {
+        self.received_note_spends
+            .get(note_id)
+            .and_then(|txid| self.tx_table.get(txid))
+            .is_some_and(|tx| {
+                matches!(tx.status(), TransactionStatus::Mined(_)) || tx.expiry_height().is_none()
+            })
+    }
+
     pub(crate) fn note_is_spent(
         &self,
         note: &ReceivedNote,

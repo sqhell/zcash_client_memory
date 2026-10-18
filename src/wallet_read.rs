@@ -629,34 +629,10 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
         query: NullifierQuery,
     ) -> Result<Vec<(Self::AccountId, sapling::Nullifier)>, Self::Error> {
         tracing::debug!("get_sapling_nullifiers");
-        let nullifiers = self.received_notes.get_sapling_nullifiers();
-        Ok(match query {
-            NullifierQuery::All => nullifiers
-                .map(|(account_id, _, nf)| (account_id, nf))
-                .collect(),
-            NullifierQuery::Unspent => nullifiers
-                .filter_map(|(account_id, _, nf)| {
-                    // find any tx we know of that spends this nullifier and if so require that it is unmined or expired
-                    if let Some((height, tx_index)) = self.nullifiers.get(&Nullifier::Sapling(nf)) {
-                        if let Some(spending_tx) =
-                            self.tx_table.get_by_height_and_index(*height, *tx_index)
-                        {
-                            if matches!(spending_tx.status(), TransactionStatus::Mined(_))
-                                || spending_tx.expiry_height().is_none()
-                            {
-                                None
-                            } else {
-                                Some((account_id, nf))
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        Some((account_id, nf))
-                    }
-                })
-                .collect(),
-        })
+        Ok(self.select_nullifiers(query, |nf| match nf {
+            Some(Nullifier::Sapling(nf)) => Some(*nf),
+            _ => None,
+        }))
     }
 
     #[cfg(feature = "orchard")]
@@ -665,34 +641,10 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
         query: NullifierQuery,
     ) -> Result<Vec<(Self::AccountId, orchard::note::Nullifier)>, Self::Error> {
         tracing::debug!("get_orchard_nullifiers");
-        let nullifiers = self.received_notes.get_orchard_nullifiers();
-        Ok(match query {
-            NullifierQuery::All => nullifiers
-                .map(|(account_id, _, nf)| (account_id, nf))
-                .collect(),
-            NullifierQuery::Unspent => nullifiers
-                .filter_map(|(account_id, _, nf)| {
-                    // find any tx we know of that spends this nullifier and if so require that it is unmined or expired
-                    if let Some((height, tx_index)) = self.nullifiers.get(&Nullifier::Orchard(nf)) {
-                        if let Some(spending_tx) =
-                            self.tx_table.get_by_height_and_index(*height, *tx_index)
-                        {
-                            if matches!(spending_tx.status(), TransactionStatus::Mined(_))
-                                || spending_tx.expiry_height().is_none()
-                            {
-                                None
-                            } else {
-                                Some((account_id, nf))
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        Some((account_id, nf))
-                    }
-                })
-                .collect(),
-        })
+        Ok(self.select_nullifiers(query, |nf| match nf {
+            Some(Nullifier::Orchard(nf)) => Some(*nf),
+            _ => None,
+        }))
     }
 
     #[cfg(feature = "orchard")]
@@ -701,35 +653,10 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
         query: NullifierQuery,
     ) -> Result<Vec<(Self::AccountId, orchard::note::Nullifier)>, Self::Error> {
         tracing::debug!("get_ironwood_nullifiers");
-        let nullifiers = self.received_notes.get_ironwood_nullifiers();
-        Ok(match query {
-            NullifierQuery::All => nullifiers
-                .map(|(account_id, _, nf)| (account_id, nf))
-                .collect(),
-            NullifierQuery::Unspent => nullifiers
-                .filter_map(|(account_id, _, nf)| {
-                    // find any tx we know of that spends this nullifier and if so require that it is unmined or expired
-                    if let Some((height, tx_index)) = self.nullifiers.get(&Nullifier::Ironwood(nf))
-                    {
-                        if let Some(spending_tx) =
-                            self.tx_table.get_by_height_and_index(*height, *tx_index)
-                        {
-                            if matches!(spending_tx.status(), TransactionStatus::Mined(_))
-                                || spending_tx.expiry_height().is_none()
-                            {
-                                None
-                            } else {
-                                Some((account_id, nf))
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        Some((account_id, nf))
-                    }
-                })
-                .collect(),
-        })
+        Ok(self.select_nullifiers(query, |nf| match nf {
+            Some(Nullifier::Ironwood(nf)) => Some(*nf),
+            _ => None,
+        }))
     }
 
     #[cfg(feature = "transparent-inputs")]
