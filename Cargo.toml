@@ -39,6 +39,9 @@ tracing = {version = "0.1", default-features = false}
 byteorder = "1"
 nonempty = {version = "0.11", default-features = false}
 prost = "0.14"
+# Checksums the wallet body in the format v2 envelope header; already in the graph through
+# zcash_primitives.
+sha2 = {version = "0.10", default-features = false}
 group = "0.13"
 jubjub = "0.10"
 

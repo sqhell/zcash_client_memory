@@ -2822,6 +2822,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "sha2 0.10.8",
  "shardtree",
  "static_assertions",
  "subtle",

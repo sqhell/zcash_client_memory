@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod envelope;
 mod pruning;
 mod serialization;
 
@@ -51,6 +52,8 @@ use crate::types::transparent::{
     TransparentReceivedOutputSpends, TransparentReceivedOutputs, TransparentSpendCache,
 };
 use crate::types::*;
+
+pub use envelope::{EncodeContext, LegacyMeta, PeekedMeta, WalletMeta, peek_meta};
 
 /// Where a wallet blob sits in its line of saves: when the lineage began, when and by whom it
 /// was last saved, and how many saves it has seen. Carried in the header of a format v2 blob,

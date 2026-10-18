@@ -2,6 +2,9 @@ use bytes::{Buf, BufMut};
 use consensus::Parameters;
 use prost::Message;
 
+use super::envelope::{
+    BODY_VERSION_V1, BODY_VERSION_V2, HashingBuf, MAGIC, network_name, read_header,
+};
 use super::*;
 use crate::error::Result;
 use crate::proto::memwallet as proto;
@@ -9,8 +12,9 @@ use crate::read_optional;
 use crate::wallet_commitment_trees::serialization::{tree_from_protobuf, tree_to_protobuf};
 
 impl<P: Parameters> MemoryWalletDb<P> {
-    /// Encode a memory wallet db as a protobuf byte buffer
-    /// Always uses the latest version of the wire protocol
+    /// Encodes the wallet as a bare format v1 body: a protobuf `MemoryWallet` message with no
+    /// header. [`Self::encode_with_meta`] is the persistence entry point; this is the body
+    /// writer it builds on, kept for the tests and the harness that compare wire forms.
     ///
     /// Fails if any part of the wallet cannot be serialized, or with [`Error::DirtyState`] if a
     /// write operation failed part-way (see [`MemoryWalletDb::is_dirty`]); it never writes a
@@ -22,8 +26,9 @@ impl<P: Parameters> MemoryWalletDb<P> {
         Ok(())
     }
 
-    /// Encode a memory wallet db into a new byte vector sized up front from the encoded length,
-    /// so a large wallet is written in one allocation instead of growing the buffer as it goes.
+    /// Encodes the wallet as a bare format v1 body (see [`Self::encode`]) into a new byte
+    /// vector sized up front from the encoded length, so a large wallet is written in one
+    /// allocation instead of growing the buffer as it goes.
     ///
     /// Fails in the same cases as [`Self::encode`].
     pub fn encode_to_vec(&self) -> Result<Vec<u8>> {
@@ -32,34 +37,95 @@ impl<P: Parameters> MemoryWalletDb<P> {
         Ok(proto_wallet.encode_to_vec())
     }
 
-    /// Create a mew memory wallet db from a protobuf encoded byte buffer with version awareness
-    pub fn decode_new<B: Buf>(buf: B, params: P, max_checkpoints: usize) -> Result<Self> {
-        let proto_wallet = proto::MemoryWallet::decode(buf)?;
-        Self::new_from_proto(proto_wallet, params, max_checkpoints)
+    /// Decodes a wallet from a blob written by [`Self::encode_with_meta`] (format v2, an
+    /// envelope with a header) or by [`Self::encode`] (format v1, a bare body), telling them
+    /// apart by the first four bytes. The decoded wallet reports which through
+    /// [`Self::loaded_format_version`]; a v2 blob also restores the wallet's [`Lineage`].
+    ///
+    /// For a v2 blob the header is checked before the body is trusted: the schema version must
+    /// be 2, the network must be the one `params` describes (else [`Error::NetworkMismatch`]),
+    /// the body must be exactly as long as the header says, and it must hash to the header's
+    /// digest (else [`Error::ChecksumMismatch`], which takes precedence over any decoding error
+    /// the corrupted body produced). A truncated envelope fails with [`Error::CorruptedData`].
+    ///
+    /// A body of any version other than the one its format calls for fails with
+    /// [`Error::UnsupportedProtoVersion`].
+    pub fn decode_new<B: Buf>(mut buf: B, params: P, max_checkpoints: usize) -> Result<Self> {
+        let mut prefix = [0u8; MAGIC.len()];
+        let sniffed = buf.remaining().min(prefix.len());
+        buf.copy_to_slice(&mut prefix[..sniffed]);
+
+        if prefix[..sniffed] != MAGIC {
+            // A bare v1 body: hand the sniffed bytes back ahead of the rest.
+            let proto_wallet = proto::MemoryWallet::decode((&prefix[..sniffed]).chain(buf))?;
+            return Self::new_from_body(proto_wallet, BODY_VERSION_V1, params, max_checkpoints);
+        }
+
+        let meta = read_header(&mut buf)?;
+        let expected = network_name(params.network_type());
+        if meta.network() != expected {
+            return Err(Error::NetworkMismatch {
+                expected: expected.to_owned(),
+                found: meta.network().to_owned(),
+            });
+        }
+        let (body_sha256, body_len) = match (meta.body_sha256(), meta.body_len()) {
+            (Some(digest), Some(len)) => (digest, len),
+            _ => {
+                return Err(Error::CorruptedData(
+                    "wallet blob header carries no body digest".into(),
+                ));
+            }
+        };
+        if u64::try_from(buf.remaining())? != body_len {
+            return Err(Error::CorruptedData(format!(
+                "wallet blob header says the body is {body_len} bytes but {} follow it",
+                buf.remaining()
+            )));
+        }
+
+        // Hash the body in the pass that decodes it. If the hash does not match, the body was
+        // corrupted and any decoding error is a symptom of that, not the diagnosis.
+        let mut body = HashingBuf::new(buf);
+        let decoded = proto::MemoryWallet::decode(&mut body);
+        if body.finish() != body_sha256 {
+            return Err(Error::ChecksumMismatch);
+        }
+
+        let mut wallet = Self::new_from_body(decoded?, BODY_VERSION_V2, params, max_checkpoints)?;
+        wallet.lineage = meta.lineage().clone();
+        Ok(wallet)
     }
 
-    /// Build a memory wallet db from protobuf type with version awareness
+    /// Builds a wallet from an already decoded bare (format v1) body.
+    ///
+    /// Fails with [`Error::UnsupportedProtoVersion`] unless the body's version is 1.
     pub fn new_from_proto(
         proto_wallet: proto::MemoryWallet,
         params: P,
         max_checkpoints: usize,
     ) -> Result<Self> {
-        match proto_wallet.version {
-            1 => Self::new_from_proto_v1(proto_wallet, params, max_checkpoints),
-            _ => Err(Error::UnsupportedProtoVersion(1, proto_wallet.version)),
-        }
+        Self::new_from_body(proto_wallet, BODY_VERSION_V1, params, max_checkpoints)
     }
 
-    fn new_from_proto_v1(
+    /// Builds a wallet from a decoded body whose version must be `version`: 1 for a bare body,
+    /// 2 for the body of an envelope. The two share a layout; the version records which
+    /// format the body was written in, and the wallet reports it as its loaded format version.
+    fn new_from_body(
         proto_wallet: proto::MemoryWallet,
+        version: u32,
         params: P,
         max_checkpoints: usize,
     ) -> Result<Self> {
-        if proto_wallet.version != 1 {
-            return Err(Error::UnsupportedProtoVersion(1, proto_wallet.version));
+        if proto_wallet.version != version {
+            return Err(Error::UnsupportedProtoVersion(
+                version,
+                proto_wallet.version,
+            ));
         }
 
         let mut wallet = MemoryWalletDb::new(params, max_checkpoints);
+        wallet.loaded_format_version = Some(version);
 
         wallet.accounts = {
             let proto_accounts = read_optional!(proto_wallet, accounts)?;
@@ -334,7 +400,7 @@ impl<P: Parameters> TryFrom<&MemoryWalletDb<P>> for proto::MemoryWallet {
     /// to drop such a tree silently, which produced a blob that could never be decoded.
     fn try_from(wallet: &MemoryWalletDb<P>) -> Result<Self> {
         Ok(Self {
-            version: 1,
+            version: BODY_VERSION_V1,
             accounts: Some(proto::Accounts::try_from(&wallet.accounts)?),
 
             blocks: wallet

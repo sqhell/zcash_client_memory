@@ -15,8 +15,9 @@ pub use types::MemoryWalletDb;
 // Re-export types needed for transaction history feature
 pub(crate) use types::*;
 pub use types::{
-    AccountId, AccountIdentity, ReceivedNote, ReceivedNoteTable, SentNote, SentNoteTable,
-    TransactionEntry, TransactionTable,
+    AccountId, AccountIdentity, EncodeContext, LegacyMeta, Lineage, PeekedMeta, ReceivedNote,
+    ReceivedNoteTable, SentNote, SentNoteTable, TransactionEntry, TransactionTable, WalletMeta,
+    peek_meta,
 };
 
 /// The maximum number of blocks the wallet is allowed to rewind. This is
