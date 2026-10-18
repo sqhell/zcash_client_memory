@@ -1,5 +1,5 @@
 use zcash_client_backend::data_api::{
-    NullifierQuery, TransactionStatus, WalletWrite, chain,
+    Account, NullifierQuery, TransactionStatus, WalletWrite, chain,
     testing::{AddressType, TestBuilder, TestFvk, pool::ShieldedPoolTester},
 };
 use zcash_primitives::block::BlockHash;
@@ -431,6 +431,72 @@ pub(crate) fn failed_put_blocks_leaves_the_wallet_dirty<T: ShieldedPoolTester>()
         st.wallet_mut().truncate_to_height(h),
         Err(Error::DirtyState("put_blocks"))
     ));
+}
+
+/// The sync-state accessors report the wallet birthday, the chain tip, the highest scanned
+/// block and the fully scanned height as scanning progresses, and `account_identities`
+/// describes the harness's derived account.
+pub(crate) fn sync_state_accessors<T: ShieldedPoolTester>() {
+    let mut st = TestBuilder::new()
+        .with_data_store_factory(TestMemDbFactory::new())
+        .with_block_cache(MemBlockCache::new())
+        .with_account_from_sapling_activation(BlockHash([0; 32]))
+        .build();
+    let birthday = st.sapling_activation_height();
+
+    assert_eq!(st.wallet().wallet_birthday(), Some(birthday));
+    assert_eq!(st.wallet().max_scanned_height(), None);
+    assert_eq!(st.wallet().fully_scanned_height().unwrap(), None);
+    assert_eq!(st.wallet().chain_tip_height().unwrap(), None);
+
+    let account = st.test_account().unwrap().account().clone();
+    let identities = st.wallet().account_identities();
+    assert_eq!(identities.len(), 1);
+    let identity = &identities[0];
+    assert_eq!(identity.account_id(), account.id());
+    assert_eq!(
+        identity.ufvk(),
+        account.ufvk().unwrap().encode(st.wallet().params())
+    );
+    assert_eq!(identity.birthday_height(), birthday);
+    match account.source() {
+        zcash_client_backend::data_api::AccountSource::Derived { derivation, .. } => {
+            assert_eq!(
+                identity.seed_fingerprint(),
+                Some(derivation.seed_fingerprint().to_bytes())
+            );
+            assert_eq!(
+                identity.hd_index(),
+                Some(u32::from(derivation.account_index()))
+            );
+        }
+        other => panic!("the harness account is derived from a seed: {other:?}"),
+    }
+
+    // Scanning the block after the birthday block leaves a gap, so nothing is fully scanned
+    // yet even though a block has been.
+    let dfvk = T::test_account_fvk(&st);
+    let (h0, _, _) = st.generate_next_block(
+        &dfvk,
+        AddressType::DefaultExternal,
+        Zatoshis::const_from_u64(100_000),
+    );
+    let (h1, _, _) = st.generate_next_block(
+        &dfvk,
+        AddressType::DefaultExternal,
+        Zatoshis::const_from_u64(100_000),
+    );
+    assert_eq!(h0, birthday);
+    st.scan_cached_blocks(h1, 1);
+    assert_eq!(st.wallet().chain_tip_height().unwrap(), Some(h1));
+    assert_eq!(st.wallet().max_scanned_height(), Some(h1));
+    assert_eq!(st.wallet().fully_scanned_height().unwrap(), None);
+
+    // Filling the gap makes the range from the birthday contiguous.
+    st.scan_cached_blocks(h0, 1);
+    assert_eq!(st.wallet().max_scanned_height(), Some(h1));
+    assert_eq!(st.wallet().fully_scanned_height().unwrap(), Some(h1));
+    assert_eq!(st.wallet().wallet_birthday(), Some(birthday));
 }
 
 /// The nullifier type of a pool tester's viewing key.

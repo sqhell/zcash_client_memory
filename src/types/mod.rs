@@ -8,6 +8,7 @@ pub(crate) mod scanning;
 pub mod transaction;
 pub(crate) mod transparent;
 
+pub use account::AccountId;
 pub(crate) use account::*;
 pub(crate) use block::*;
 pub(crate) use data_requests::*;

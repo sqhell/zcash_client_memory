@@ -21,8 +21,8 @@ use shardtree::{
 use zcash_client_backend::wallet::TransparentAddressMetadata;
 use zcash_client_backend::{
     data_api::{
-        Account as _, AccountBirthday, AccountSource, InputSource, NullifierQuery, Ratio,
-        SAPLING_SHARD_HEIGHT, TransactionStatus, WalletRead,
+        Account as _, AccountBirthday, AccountPurpose, AccountSource, InputSource, NullifierQuery,
+        Ratio, SAPLING_SHARD_HEIGHT, TransactionStatus, WalletRead,
         scanning::{ScanPriority, ScanRange},
         wallet::{ConfirmationsPolicy, TargetHeight},
     },
@@ -50,6 +50,47 @@ use crate::types::transparent::{
     TransparentReceivedOutputSpends, TransparentReceivedOutputs, TransparentSpendCache,
 };
 use crate::types::*;
+
+/// What identifies a wallet account to the application: enough to recognise the account again
+/// after the wallet is restored, and to tell a derived account from an imported one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountIdentity {
+    account_id: AccountId,
+    ufvk: String,
+    seed_fingerprint: Option<[u8; 32]>,
+    hd_index: Option<u32>,
+    birthday_height: BlockHeight,
+}
+
+impl AccountIdentity {
+    /// The wallet-internal account identifier.
+    pub fn account_id(&self) -> AccountId {
+        self.account_id
+    }
+
+    /// The account's unified full viewing key, encoded for the wallet's network.
+    pub fn ufvk(&self) -> &str {
+        &self.ufvk
+    }
+
+    /// The ZIP 32 fingerprint of the seed the account's keys were derived from, when known. It
+    /// is known for derived accounts and for imported spending accounts that recorded their
+    /// derivation; it is `None` for view-only accounts.
+    pub fn seed_fingerprint(&self) -> Option<[u8; 32]> {
+        self.seed_fingerprint
+    }
+
+    /// The ZIP 32 account index the keys were derived at, when known (see
+    /// [`Self::seed_fingerprint`]).
+    pub fn hd_index(&self) -> Option<u32> {
+        self.hd_index
+    }
+
+    /// The height from which the account's funds are scanned for.
+    pub fn birthday_height(&self) -> BlockHeight {
+        self.birthday_height
+    }
+}
 
 /// The main in-memory wallet database. Implements all the traits needed to be used as a backend.
 #[derive(Debug)]
@@ -1539,6 +1580,64 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
     pub fn get_block_time(&self, height: BlockHeight) -> Option<u32> {
         self.blocks.get(&height).map(|block| block.block_time)
     }
+
+    // Sync-state accessors, for applications that drive scanning and persistence themselves.
+
+    /// The lowest birthday height over all accounts, or `None` if the wallet has no accounts.
+    /// No block below it needs to be scanned.
+    pub fn wallet_birthday(&self) -> Option<BlockHeight> {
+        self.accounts
+            .values()
+            .map(|account| account.birthday().height())
+            .min()
+    }
+
+    /// The height up to which every block from the wallet birthday has been scanned, or `None`
+    /// if there is no such contiguous range yet (no accounts, nothing scanned, or a gap right
+    /// after the birthday). Notes below this height are complete; nothing above it is
+    /// guaranteed to be.
+    pub fn fully_scanned_height(&self) -> Result<Option<BlockHeight>, Error> {
+        Ok(self.block_fully_scanned()?.map(|meta| meta.block_height()))
+    }
+
+    /// The highest block height that has been scanned, or `None` if no block has been. Unlike
+    /// [`Self::fully_scanned_height`] this says nothing about the blocks below it.
+    pub fn max_scanned_height(&self) -> Option<BlockHeight> {
+        self.blocks.keys().max().copied()
+    }
+
+    /// The chain tip height the wallet was last told about through `update_chain_tip`, or
+    /// `None` before the first update.
+    pub fn chain_tip_height(&self) -> Result<Option<BlockHeight>, Error> {
+        self.chain_height()
+    }
+
+    /// The identity of every account in the wallet, in account id order.
+    pub fn account_identities(&self) -> Vec<AccountIdentity> {
+        self.accounts
+            .values()
+            .map(|account| {
+                let derivation = match account.kind() {
+                    AccountSource::Derived { derivation, .. } => Some(derivation),
+                    AccountSource::Imported {
+                        purpose: AccountPurpose::Spending { derivation },
+                        ..
+                    } => derivation.as_ref(),
+                    AccountSource::Imported {
+                        purpose: AccountPurpose::ViewOnly,
+                        ..
+                    } => None,
+                };
+                AccountIdentity {
+                    account_id: account.account_id(),
+                    ufvk: account.viewing_key().encode(&self.params),
+                    seed_fingerprint: derivation.map(|d| d.seed_fingerprint().to_bytes()),
+                    hd_index: derivation.map(|d| u32::from(d.account_index())),
+                    birthday_height: account.birthday().height(),
+                }
+            })
+            .collect()
+    }
 }
 
 /// Returns the greatest checkpoint height in `store` whose block has at least
@@ -1571,10 +1670,44 @@ fn max_checkpointed_height<H: Clone>(
 mod tests {
     use super::*;
     use crate::PRUNING_DEPTH;
+    use zcash_client_backend::data_api::WalletWrite;
     use zcash_protocol::consensus::Network;
 
     fn sapling_nf(byte: u8) -> Nullifier {
         Nullifier::Sapling(sapling::Nullifier([byte; 32]))
+    }
+
+    #[test]
+    fn empty_wallet_has_no_sync_state() {
+        let db = MemoryWalletDb::new(Network::TestNetwork, 100);
+        assert_eq!(db.wallet_birthday(), None);
+        assert_eq!(db.fully_scanned_height().unwrap(), None);
+        assert_eq!(db.max_scanned_height(), None);
+        assert_eq!(db.chain_tip_height().unwrap(), None);
+        assert!(db.account_identities().is_empty());
+    }
+
+    #[test]
+    fn wallet_summary_without_accounts_is_none_even_after_a_chain_tip() {
+        let mut db = MemoryWalletDb::new(Network::TestNetwork, 100);
+        assert!(
+            db.get_wallet_summary(ConfirmationsPolicy::MIN)
+                .unwrap()
+                .is_none()
+        );
+
+        // An empty wallet still records the chain tip (as an ignored range), which used to make
+        // the summary look up a wallet birthday that does not exist.
+        db.update_chain_tip(BlockHeight::from(1_000_000)).unwrap();
+        assert_eq!(
+            db.chain_tip_height().unwrap(),
+            Some(BlockHeight::from(1_000_000))
+        );
+        assert!(
+            db.get_wallet_summary(ConfirmationsPolicy::MIN)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

@@ -226,3 +226,8 @@ fn rolled_back_spend_returns_the_note_to_unspent() {
 fn failed_put_blocks_leaves_the_wallet_dirty() {
     testing::pool::failed_put_blocks_leaves_the_wallet_dirty::<OrchardPoolTester>()
 }
+
+#[test]
+fn sync_state_accessors() {
+    testing::pool::sync_state_accessors::<OrchardPoolTester>()
+}

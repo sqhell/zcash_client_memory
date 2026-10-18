@@ -203,9 +203,13 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
             None => return Ok(None),
         };
         let target_height = TargetHeight::from(chain_tip_height + 1);
-        let birthday_height = self
-            .get_wallet_birthday()?
-            .expect("If a scan range exists, we know the wallet birthday.");
+        // A chain tip can be known before any account exists: `update_chain_tip` records an
+        // ignored range for an empty wallet. There is nothing to summarize until an account
+        // gives the wallet a birthday.
+        let birthday_height = match self.get_wallet_birthday()? {
+            Some(height) => height,
+            None => return Ok(None),
+        };
 
         let fully_scanned_height = self
             .block_fully_scanned()?
@@ -358,8 +362,13 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
             ironwood_scan_progress,
         );
 
-        // TODO: This won't work
-        let scan_progress = Progress::new(scan_progress.unwrap(), Some(Ratio::new(0, 0)));
+        // No pool could estimate its progress (nothing is known about the tree sizes yet), so
+        // report nothing scanned out of nothing rather than fail the whole summary. The
+        // recovery ratio is always empty: this store does not track a recover-until height.
+        let scan_progress = Progress::new(
+            scan_progress.unwrap_or_else(|| Ratio::new(0, 0)),
+            Some(Ratio::new(0, 0)),
+        );
 
         let summary = WalletSummary::new(
             account_balances,

@@ -332,6 +332,10 @@ impl Account {
         &self.kind
     }
 
+    pub(crate) fn viewing_key(&self) -> &UnifiedFullViewingKey {
+        &self.viewing_key
+    }
+
     pub(crate) fn next_available_address(
         &mut self,
         request: UnifiedAddressRequest,
