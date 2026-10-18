@@ -818,3 +818,82 @@ impl ScanPriority {
         }
     }
 }
+/// The header of a format v2 wallet blob. It describes the wallet body that follows it well
+/// enough for an application to recognise, verify and compare saved blobs without decoding
+/// the body.
+///
+/// Wire layout of a v2 blob:
+///
+///    magic         b"ZMWD" (4 bytes)
+///    header_len    u32, little endian
+///    WalletMeta    header_len bytes
+///    MemoryWallet  the body (MemoryWallet.version = 2), body_len bytes
+///
+/// A v1 blob is a bare MemoryWallet with version = 1. Its first bytes are 0x08 0x01 (field 1,
+/// varint, value 1), so the magic can never be mistaken for one.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WalletMeta {
+    /// the version of the blob format this header belongs to: 2
+    #[prost(uint32, tag = "1")]
+    pub schema_version: u32,
+    /// the network the wallet was saved for: "main", "test" or "regtest"
+    #[prost(string, tag = "2")]
+    pub network: ::prost::alloc::string::String,
+    /// Unix time in milliseconds of the first save of this wallet lineage; preserved across saves
+    #[prost(uint64, tag = "3")]
+    pub created_at_ms: u64,
+    /// Unix time in milliseconds of this save
+    #[prost(uint64, tag = "4")]
+    pub saved_at_ms: u64,
+    /// the identifier of the application instance that wrote this blob
+    #[prost(string, tag = "5")]
+    pub writer_id: ::prost::alloc::string::String,
+    /// incremented on every save of this lineage, starting at 1
+    #[prost(uint64, tag = "6")]
+    pub save_seq: u64,
+    /// the lowest account birthday height; absent when the wallet has no accounts
+    #[prost(uint32, optional, tag = "7")]
+    pub birthday_height: ::core::option::Option<u32>,
+    /// the height up to which every block from the birthday has been scanned, when known
+    #[prost(uint32, optional, tag = "8")]
+    pub fully_scanned_height: ::core::option::Option<u32>,
+    /// the highest scanned block height, when any block has been scanned
+    #[prost(uint32, optional, tag = "9")]
+    pub max_scanned_height: ::core::option::Option<u32>,
+    /// the chain tip height the wallet was last told about, when any
+    #[prost(uint32, optional, tag = "10")]
+    pub chain_tip_height: ::core::option::Option<u32>,
+    /// the number of accounts in the wallet
+    #[prost(uint32, tag = "11")]
+    pub account_count: u32,
+    /// the encoded unified full viewing key of every account, in account id order
+    #[prost(string, repeated, tag = "12")]
+    pub account_ufvks: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// the ZIP 32 seed fingerprint of account 0, when known
+    #[prost(bytes = "vec", optional, tag = "13")]
+    pub seed_fingerprint: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    /// SHA-256 of the body bytes; empty when the header was built without a body
+    #[prost(bytes = "vec", tag = "14")]
+    pub body_sha256: ::prost::alloc::vec::Vec<u8>,
+    /// the length of the body in bytes; zero when the header was built without a body
+    #[prost(uint64, tag = "15")]
+    pub body_len: u64,
+    /// the number of block records the body carries
+    #[prost(uint32, tag = "16")]
+    pub blocks_retained: u32,
+}
+/// The subset of a v1 MemoryWallet that describes the wallet. Decoding a v1 blob as this
+/// message skips every other field (blocks, notes, trees), so it costs nothing proportional to
+/// the wallet's history. The tags match MemoryWallet.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LegacyPeek {
+    /// the version of the wallet serialization format
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    /// the accounts in this wallet
+    #[prost(message, optional, tag = "2")]
+    pub accounts: ::core::option::Option<Accounts>,
+    /// the scan queue, from which the chain tip is read
+    #[prost(message, repeated, tag = "10")]
+    pub scan_queue: ::prost::alloc::vec::Vec<ScanQueueRecord>,
+}

@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package memwallet;
+
+import "memory_wallet.proto";
+
+// The header of a format v2 wallet blob. It describes the wallet body that follows it well
+// enough for an application to recognise, verify and compare saved blobs without decoding
+// the body.
+//
+// Wire layout of a v2 blob:
+//
+//   magic         b"ZMWD" (4 bytes)
+//   header_len    u32, little endian
+//   WalletMeta    header_len bytes
+//   MemoryWallet  the body (MemoryWallet.version = 2), body_len bytes
+//
+// A v1 blob is a bare MemoryWallet with version = 1. Its first bytes are 0x08 0x01 (field 1,
+// varint, value 1), so the magic can never be mistaken for one.
+message WalletMeta {
+  // the version of the blob format this header belongs to: 2
+  uint32 schema_version = 1;
+  // the network the wallet was saved for: "main", "test" or "regtest"
+  string network = 2;
+  // Unix time in milliseconds of the first save of this wallet lineage; preserved across saves
+  uint64 created_at_ms = 3;
+  // Unix time in milliseconds of this save
+  uint64 saved_at_ms = 4;
+  // the identifier of the application instance that wrote this blob
+  string writer_id = 5;
+  // incremented on every save of this lineage, starting at 1
+  uint64 save_seq = 6;
+  // the lowest account birthday height; absent when the wallet has no accounts
+  optional uint32 birthday_height = 7;
+  // the height up to which every block from the birthday has been scanned, when known
+  optional uint32 fully_scanned_height = 8;
+  // the highest scanned block height, when any block has been scanned
+  optional uint32 max_scanned_height = 9;
+  // the chain tip height the wallet was last told about, when any
+  optional uint32 chain_tip_height = 10;
+  // the number of accounts in the wallet
+  uint32 account_count = 11;
+  // the encoded unified full viewing key of every account, in account id order
+  repeated string account_ufvks = 12;
+  // the ZIP 32 seed fingerprint of account 0, when known
+  optional bytes seed_fingerprint = 13;
+  // SHA-256 of the body bytes; empty when the header was built without a body
+  bytes body_sha256 = 14;
+  // the length of the body in bytes; zero when the header was built without a body
+  uint64 body_len = 15;
+  // the number of block records the body carries
+  uint32 blocks_retained = 16;
+}
+
+// The subset of a v1 MemoryWallet that describes the wallet. Decoding a v1 blob as this
+// message skips every other field (blocks, notes, trees), so it costs nothing proportional to
+// the wallet's history. The tags match MemoryWallet.
+message LegacyPeek {
+  // the version of the wallet serialization format
+  uint32 version = 1;
+  // the accounts in this wallet
+  Accounts accounts = 2;
+  // the scan queue, from which the chain tip is read
+  repeated ScanQueueRecord scan_queue = 10;
+}

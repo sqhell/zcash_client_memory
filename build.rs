@@ -32,6 +32,7 @@ fn build() -> io::Result<()> {
     prost_build::compile_protos(
         &[
             MEMORY_WALLET_PROTO,
+            "proto/meta.proto",
             "proto/notes.proto",
             "proto/primitives.proto",
             "proto/shardtree.proto",
