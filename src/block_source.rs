@@ -126,27 +126,38 @@ impl BlockCache for MemBlockCache {
 
 #[cfg(test)]
 mod tests {
+    use std::task::{Context, Poll, Waker};
+
     use super::*;
     use zcash_client_backend::data_api::scanning::ScanPriority;
 
-    #[test]
-    fn delete_removes_blocks_without_awaiting() {
+    fn cache_with_blocks(heights: std::ops::Range<u32>) -> MemBlockCache {
         let cache = MemBlockCache::new();
-        for h in 100u32..110 {
+        for h in heights {
             let block = CompactBlock {
                 height: h.into(),
                 ..Default::default()
             };
             cache.0.write().unwrap().insert(h.into(), block);
         }
+        cache
+    }
+
+    fn scanned(range: std::ops::Range<u32>) -> ScanRange {
+        ScanRange::from_parts(
+            BlockHeight::from(range.start)..BlockHeight::from(range.end),
+            ScanPriority::Scanned,
+        )
+    }
+
+    #[test]
+    fn delete_removes_blocks_without_awaiting() {
+        let cache = cache_with_blocks(100..110);
         assert!(cache.find_block(105.into()).is_some());
 
         // `sync::run` collects these futures and only awaits them after the whole sync,
         // so the removal must happen when `delete` is called, not when it is polled.
-        let _unpolled = cache.delete(ScanRange::from_parts(
-            BlockHeight::from(100)..BlockHeight::from(105),
-            ScanPriority::Scanned,
-        ));
+        let _unpolled = cache.delete(scanned(100..105));
 
         for h in 100u32..105 {
             assert!(
@@ -155,5 +166,47 @@ mod tests {
             );
         }
         assert!(cache.find_block(105.into()).is_some());
+    }
+
+    #[test]
+    fn delete_only_touches_the_requested_range() {
+        let cache = cache_with_blocks(100..110);
+
+        drop(cache.delete(scanned(103..106)));
+
+        let remaining: Vec<u32> = cache
+            .0
+            .read()
+            .unwrap()
+            .keys()
+            .map(|h| u32::from(*h))
+            .collect();
+        assert_eq!(remaining, vec![100, 101, 102, 106, 107, 108, 109]);
+    }
+
+    #[test]
+    fn delete_future_resolves_immediately() {
+        let cache = cache_with_blocks(100..110);
+
+        let mut fut = cache.delete(scanned(100..110));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(fut.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
+        assert_eq!(cache.get_tip_height(None), Ok(None));
+    }
+
+    #[test]
+    fn delete_of_missing_blocks_is_a_noop() {
+        let cache = cache_with_blocks(100..105);
+
+        // Nothing in 200..300 is cached; deleting it must not fail or touch other blocks.
+        let mut fut = cache.delete(scanned(200..300));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(matches!(fut.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
+        assert_eq!(cache.get_tip_height(None), Ok(Some(104.into())));
+
+        // Deleting from an empty cache is also fine.
+        let empty = MemBlockCache::new();
+        drop(empty.delete(scanned(0..10)));
+        assert_eq!(empty.get_tip_height(None), Ok(None));
     }
 }

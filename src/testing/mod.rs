@@ -34,6 +34,9 @@ use {
 pub mod pool;
 
 #[cfg(test)]
+mod pruning;
+
+#[cfg(test)]
 #[cfg(feature = "transparent-inputs")]
 mod transparent;
 

@@ -1281,27 +1281,40 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PRUNING_DEPTH;
     use zcash_protocol::consensus::Network;
 
     fn sapling_nf(byte: u8) -> Nullifier {
         Nullifier::Sapling(sapling::Nullifier([byte; 32]))
     }
 
-    #[test]
-    fn prune_nullifier_map_below_keeps_entries_at_and_above_cutoff() {
-        let mut db = MemoryWalletDb::new(Network::TestNetwork, 100);
-        let txid = |b: u8| TxId::from_bytes([b; 32]);
-        for (height, byte) in [(100u32, 1u8), (199, 2), (200, 3), (201, 4), (500, 5)] {
+    fn txid(byte: u8) -> TxId {
+        TxId::from_bytes([byte; 32])
+    }
+
+    /// Inserts one Sapling nullifier (and its transaction locator) per `(height, byte)` pair.
+    fn insert_sapling_entries(db: &mut MemoryWalletDb<Network>, entries: &[(u32, u8)]) {
+        for (height, byte) in entries {
             db.insert_sapling_nullifier_map(
-                height.into(),
+                (*height).into(),
                 &[(
-                    TxIndex::from(byte as u16),
-                    txid(byte),
-                    vec![sapling::Nullifier([byte; 32])],
+                    TxIndex::from(*byte as u16),
+                    txid(*byte),
+                    vec![sapling::Nullifier([*byte; 32])],
                 )],
             )
             .unwrap();
         }
+    }
+
+    fn locator_heights(db: &MemoryWalletDb<Network>) -> Vec<u32> {
+        db.tx_locator.0.keys().map(|(h, _)| u32::from(*h)).collect()
+    }
+
+    #[test]
+    fn prune_nullifier_map_below_keeps_entries_at_and_above_cutoff() {
+        let mut db = MemoryWalletDb::new(Network::TestNetwork, 100);
+        insert_sapling_entries(&mut db, &[(100, 1), (199, 2), (200, 3), (201, 4), (500, 5)]);
         assert_eq!(db.nullifiers.0.len(), 5);
         assert_eq!(db.tx_locator.0.len(), 5);
 
@@ -1312,13 +1325,78 @@ mod tests {
         assert_eq!(db.nullifiers.get(&sapling_nf(3)), Some(&(200.into(), 3)));
         assert_eq!(db.nullifiers.get(&sapling_nf(4)), Some(&(201.into(), 4)));
         assert_eq!(db.nullifiers.get(&sapling_nf(5)), Some(&(500.into(), 5)));
-        assert_eq!(
-            db.tx_locator
-                .0
-                .keys()
-                .map(|(h, _)| u32::from(*h))
-                .collect::<Vec<_>>(),
-            vec![200, 201, 500]
+        assert_eq!(locator_heights(&db), vec![200, 201, 500]);
+    }
+
+    #[test]
+    fn prune_nullifier_map_below_is_idempotent() {
+        let mut db = MemoryWalletDb::new(Network::TestNetwork, 100);
+        insert_sapling_entries(&mut db, &[(100, 1), (300, 2)]);
+
+        db.prune_nullifier_map_below(200.into());
+        let after_first = (db.nullifiers.clone(), db.tx_locator.clone());
+        db.prune_nullifier_map_below(200.into());
+
+        assert_eq!((db.nullifiers.clone(), db.tx_locator.clone()), after_first);
+        assert_eq!(locator_heights(&db), vec![300]);
+    }
+
+    #[test]
+    fn prune_nullifier_map_below_zero_keeps_everything() {
+        let mut db = MemoryWalletDb::new(Network::TestNetwork, 100);
+        insert_sapling_entries(&mut db, &[(0, 1), (100, 2)]);
+
+        db.prune_nullifier_map_below(0.into());
+
+        assert_eq!(db.nullifiers.0.len(), 2);
+        assert_eq!(locator_heights(&db), vec![0, 100]);
+    }
+
+    #[test]
+    #[cfg(feature = "orchard")]
+    fn prune_nullifier_map_below_prunes_orchard_entries() {
+        let mut db = MemoryWalletDb::new(Network::TestNetwork, 100);
+        let orchard_nf = |byte: u8| {
+            // `CtOption::unwrap` panics if the bytes are not a canonical field element.
+            orchard::note::Nullifier::from_bytes(&[byte; 32]).unwrap()
+        };
+        for (height, byte) in [(100u32, 1u8), (200, 2)] {
+            db.insert_orchard_nullifier_map(
+                height.into(),
+                &[(
+                    TxIndex::from(byte as u16),
+                    txid(byte),
+                    vec![orchard_nf(byte)],
+                )],
+            )
+            .unwrap();
+        }
+
+        db.prune_nullifier_map_below(200.into());
+
+        assert!(
+            db.nullifiers
+                .get(&Nullifier::Orchard(orchard_nf(1)))
+                .is_none()
         );
+        assert_eq!(
+            db.nullifiers.get(&Nullifier::Orchard(orchard_nf(2))),
+            Some(&(200.into(), 2))
+        );
+        assert_eq!(locator_heights(&db), vec![200]);
+    }
+
+    #[test]
+    fn prune_tracked_nullifiers_is_a_noop_without_a_fully_scanned_height() {
+        // A wallet with no accounts has no birthday, hence no fully scanned height, so there is
+        // no safe cutoff and nothing may be pruned.
+        let mut db = MemoryWalletDb::new(Network::TestNetwork, 100);
+        insert_sapling_entries(&mut db, &[(0, 1), (1_000, 2), (1_000_000, 3)]);
+        assert!(db.block_fully_scanned().unwrap().is_none());
+
+        db.prune_tracked_nullifiers(PRUNING_DEPTH).unwrap();
+
+        assert_eq!(db.nullifiers.0.len(), 3);
+        assert_eq!(locator_heights(&db), vec![0, 1_000, 1_000_000]);
     }
 }
