@@ -61,6 +61,8 @@ pub enum Error {
     ByteVecToArrayConversion(Vec<u8>),
     #[error("Chain height unknown")]
     ChainHeightUnknown,
+    #[error("Wallet blob checksum mismatch: the body does not hash to the digest in its header")]
+    ChecksumMismatch,
     #[error("Conflicting Tx Locator map entry")]
     ConflictingTxLocator,
     #[error(
@@ -87,6 +89,8 @@ pub enum Error {
     Missing(String),
     #[error("Note not found")]
     NoteNotFound,
+    #[error("Wallet blob was saved for network `{found}`, but this wallet is for `{expected}`")]
+    NetworkMismatch { expected: String, found: String },
     #[error("Blocks are non sequental")]
     NonSequentialBlocks,
     #[error("Orchard specific code was called without the 'orchard' feature enabled")]

@@ -52,6 +52,68 @@ use crate::types::transparent::{
 };
 use crate::types::*;
 
+/// Where a wallet blob sits in its line of saves: when the lineage began, when and by whom it
+/// was last saved, and how many saves it has seen. Carried in the header of a format v2 blob,
+/// never in the body, and restored on decode so that the next save continues the lineage.
+///
+/// All zero (and an empty writer id) for a wallet that has never been saved with
+/// [`MemoryWalletDb::encode_with_meta`], including one decoded from a v1 blob.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Lineage {
+    created_at_ms: u64,
+    saved_at_ms: u64,
+    writer_id: String,
+    save_seq: u64,
+}
+
+impl Lineage {
+    /// Unix time in milliseconds of the first save of this lineage, or zero before any save.
+    pub fn created_at_ms(&self) -> u64 {
+        self.created_at_ms
+    }
+
+    /// Unix time in milliseconds of the last save, or zero before any save.
+    pub fn saved_at_ms(&self) -> u64 {
+        self.saved_at_ms
+    }
+
+    /// The writer id the last save was made with, or empty before any save.
+    pub fn writer_id(&self) -> &str {
+        &self.writer_id
+    }
+
+    /// The number of saves this lineage has seen; zero before any save.
+    pub fn save_seq(&self) -> u64 {
+        self.save_seq
+    }
+
+    /// Records a save made at `now_ms` by `writer_id`: the sequence number advances, the
+    /// creation time is fixed by the first save, and the save time and writer are replaced.
+    pub(crate) fn record_save(&mut self, now_ms: u64, writer_id: &str) {
+        self.save_seq += 1;
+        if self.created_at_ms == 0 {
+            self.created_at_ms = now_ms;
+        }
+        self.saved_at_ms = now_ms;
+        self.writer_id = writer_id.to_owned();
+    }
+
+    /// The lineage a header describes.
+    pub(crate) fn from_parts(
+        created_at_ms: u64,
+        saved_at_ms: u64,
+        writer_id: String,
+        save_seq: u64,
+    ) -> Self {
+        Self {
+            created_at_ms,
+            saved_at_ms,
+            writer_id,
+            save_seq,
+        }
+    }
+}
+
 /// What identifies a wallet account to the application: enough to recognise the account again
 /// after the wallet is restored, and to tell a derived account from an imported one.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -164,6 +226,15 @@ pub struct MemoryWalletDb<P: consensus::Parameters> {
     /// wallet is always clean. Not part of `PartialEq`.
     dirty: Option<&'static str>,
 
+    /// The save history of this wallet, carried in the header of a format v2 blob rather than
+    /// in the body (see [`Lineage`]). Not part of `PartialEq`: two wallets with the same state
+    /// are equal however many times each has been saved.
+    pub(crate) lineage: Lineage,
+    /// The format version of the blob this wallet was decoded from, or `None` for a wallet
+    /// that was not decoded from one (see [`Self::loaded_format_version`]). Never serialized
+    /// and not part of `PartialEq`.
+    pub(crate) loaded_format_version: Option<u32>,
+
     /// Test-only: when set, `put_blocks` leaves its block records unpruned so that a test can
     /// compare the wallet before and after [`Self::prune_blocks`]. Never serialized.
     #[cfg(test)]
@@ -239,6 +310,8 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
             transparent_spend_map: TransparentSpendCache::new(),
             transaction_data_request_queue: TransactionDataRequestQueue::new(),
             dirty: None,
+            lineage: Lineage::default(),
+            loaded_format_version: None,
             #[cfg(test)]
             defer_block_pruning: false,
         }
@@ -267,6 +340,19 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
     /// should discard it and rebuild from the last successfully persisted encoding.
     pub fn is_dirty(&self) -> Option<&'static str> {
         self.dirty
+    }
+
+    /// The save history of this wallet: see [`Lineage`].
+    pub fn lineage(&self) -> &Lineage {
+        &self.lineage
+    }
+
+    /// The format version of the blob this wallet was decoded from: `Some(1)` for a bare v1
+    /// body, `Some(2)` for an envelope with a header (see [`Self::encode_with_meta`]), and
+    /// `None` for a wallet that was created rather than decoded. Lets an application tell
+    /// that a wallet still needs to be re-saved in the current format.
+    pub fn loaded_format_version(&self) -> Option<u32> {
+        self.loaded_format_version
     }
 
     /// Returns [`Error::DirtyState`] if a write operation failed part-way.
