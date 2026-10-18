@@ -153,17 +153,17 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 # (rev 3bd2b736, still 0.15.0). Required for standalone builds of this fork; the webzjs root
 # patch also carries it when this fork is consumed as a git dependency.
 orchard = {git = "https://github.com/zcash/orchard.git", rev = "3bd2b736d1273226595773265313fc3f3428af16"}
-equihash = {git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2"}
-zcash_address = {git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2"}
-zcash_client_backend = {git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2"}
-zcash_encoding = {git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2"}
-zcash_keys = {git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2"}
-zcash_protocol = {git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2"}
-zip321 = {git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2"}
-zcash_primitives = {git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2"}
-zcash_proofs = {git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2"}
-pczt = {git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2"}
-zcash_transparent = {git = "https://github.com/zcash/librustzcash", rev = "0a2c6d1ae6274e6af2291e312f7b7459516882f2"}
+equihash = {git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c"}
+zcash_address = {git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c"}
+zcash_client_backend = {git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c"}
+zcash_encoding = {git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c"}
+zcash_keys = {git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c"}
+zcash_protocol = {git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c"}
+zip321 = {git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c"}
+zcash_primitives = {git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c"}
+zcash_proofs = {git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c"}
+pczt = {git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c"}
+zcash_transparent = {git = "https://github.com/sqhell/librustzcash", rev = "d08db55ad8373ce2342a74bb30038532c985662c"}
 
 [profile.release]
 lto = true
