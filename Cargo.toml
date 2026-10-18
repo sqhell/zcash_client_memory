@@ -75,8 +75,7 @@ time = {version = "0.3.22", default-features = false}
 [dev-dependencies]
 ciborium = "0.2.2"
 serde_json = "1"
-# `pczt` gates the backend's NU6.3 test cases (Ironwood outputs, version 6 PCZTs).
-zcash_client_backend = {version = "0.24.0-rc.1", features = ["test-dependencies", "pczt"]}
+zcash_client_backend = {version = "0.24.0-rc.1", features = ["test-dependencies"]}
 postcard = {version = "1", default-features = false, features = ["alloc"]}
 
 
@@ -89,6 +88,13 @@ multicore = ["zcash_primitives/multicore"]
 ## Enables support for storing data related to the sending and receiving of
 ## Orchard funds.
 orchard = ["dep:orchard", "zcash_client_backend/orchard", "zcash_keys/orchard"]
+
+## Enables the backend's PCZT test cases (the NU6.3 version 6 PCZT flow), which need the
+## backend's `pczt` feature. That feature implies the backend's `orchard` and
+## `transparent-inputs` features, so this crate's must be on too or the backend's trait
+## shapes no longer match this crate's feature gating. Kept off the dev-dependency so that
+## `cargo test --no-default-features` still builds, as `zcash_client_sqlite` does.
+pczt-tests = ["orchard", "transparent-inputs", "zcash_client_backend/pczt"]
 
 ## Exposes APIs that are useful for testing, such as `proptest` strategies.
 test-dependencies = [

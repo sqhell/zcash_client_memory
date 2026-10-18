@@ -113,7 +113,7 @@ pub(crate) fn zip317_spend<T: ShieldedPoolTester>() {
 }
 
 /// NU6.3: a payment to an Orchard receiver becomes a version 6 PCZT with an Ironwood bundle.
-#[cfg(feature = "orchard")]
+#[cfg(feature = "pczt-tests")]
 pub(crate) fn create_pczt_supports_ironwood_output() {
     zcash_client_backend::data_api::testing::pool::create_pczt_supports_ironwood_output(
         TestMemDbFactory::new(),

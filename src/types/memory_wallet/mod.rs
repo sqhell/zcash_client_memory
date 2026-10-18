@@ -31,7 +31,7 @@ use zcash_client_backend::{
 use zcash_keys::keys::UnifiedFullViewingKey;
 use zcash_primitives::transaction::Transaction;
 use zcash_protocol::{
-    ShieldedPool, ShieldedProtocol, TxId,
+    ShieldedPool, TxId,
     consensus::{self, BlockHeight, NetworkUpgrade, TxIndex},
 };
 use zip32::{Scope, fingerprint::SeedFingerprint};

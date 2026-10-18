@@ -177,6 +177,7 @@ fn receive_two_notes_with_same_value() {
 // coinbase filter excludes them), which fails before anything Ironwood-specific runs.
 
 #[test]
+#[cfg(feature = "pczt-tests")]
 fn create_pczt_supports_ironwood_output() {
     testing::pool::create_pczt_supports_ironwood_output()
 }

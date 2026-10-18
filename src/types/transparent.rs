@@ -13,6 +13,7 @@ use zcash_client_backend::wallet::WalletTransparentOutput;
 use zcash_protocol::{TxId, consensus::BlockHeight};
 
 use super::AccountId;
+#[cfg(feature = "transparent-inputs")]
 use crate::Error;
 
 /// Stores the transparent outputs received by the wallet.
@@ -196,8 +197,7 @@ mod serialization {
             let key_scope = match output.key_scope {
                 Some(scope_value) => TransparentKeyScope::custom(scope_value).ok_or_else(|| {
                     Error::CorruptedData(format!(
-                        "Invalid TransparentKeyScope value: {} (must be < 2^31)",
-                        scope_value
+                        "Invalid TransparentKeyScope value: {scope_value} (must be < 2^31)"
                     ))
                 })?,
                 None => TransparentKeyScope::EXTERNAL, // Default for old data without key_scope

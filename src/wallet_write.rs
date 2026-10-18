@@ -29,21 +29,22 @@ use zcash_client_backend::{
 use zcash_primitives::transaction::Transaction;
 use zcash_protocol::{
     PoolType,
-    ShieldedPool::{self as ShieldedPool, Sapling},
+    ShieldedPool::{self, Sapling},
     TxId,
     consensus::{self, BlockHeight, NetworkUpgrade},
 };
 use zip32::{DiversifierIndex, fingerprint::SeedFingerprint};
 
 use crate::{
-    AccountId, MemoryWalletBlock, MemoryWalletDb, Nullifier, PRUNING_DEPTH, ReceivedNote,
-    VERIFY_LOOKAHEAD, error::Error,
+    MemoryWalletBlock, MemoryWalletDb, Nullifier, PRUNING_DEPTH, ReceivedNote, VERIFY_LOOKAHEAD,
+    error::Error,
 };
 
 #[cfg(feature = "orchard")]
 use {
-    crate::types::notes::shielded_protocol_for_value_pool, shardtree::error::ShardTreeError,
-    std::collections::BTreeMap, zcash_client_backend::data_api::ORCHARD_SHARD_HEIGHT,
+    crate::AccountId, crate::types::notes::shielded_protocol_for_value_pool,
+    shardtree::error::ShardTreeError, std::collections::BTreeMap,
+    zcash_client_backend::data_api::ORCHARD_SHARD_HEIGHT,
     zcash_client_backend::wallet::WalletOrchardOutput,
 };
 
@@ -441,19 +442,17 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
                     .iter()
                     .map(|out| (ShieldedPool::Sapling, out.note_commitment_tree_position()));
                 #[cfg(feature = "orchard")]
-                let iter = iter.chain(wtx.orchard_outputs().iter().map(|out| {
-                    (
-                        ShieldedProtocol::Orchard,
-                        out.note_commitment_tree_position(),
-                    )
-                }));
+                let iter = iter.chain(
+                    wtx.orchard_outputs()
+                        .iter()
+                        .map(|out| (ShieldedPool::Orchard, out.note_commitment_tree_position())),
+                );
                 #[cfg(feature = "orchard")]
-                let iter = iter.chain(wtx.ironwood_outputs().iter().map(|out| {
-                    (
-                        ShieldedProtocol::Ironwood,
-                        out.note_commitment_tree_position(),
-                    )
-                }));
+                let iter = iter.chain(
+                    wtx.ironwood_outputs()
+                        .iter()
+                        .map(|out| (ShieldedPool::Ironwood, out.note_commitment_tree_position())),
+                );
 
                 iter
             }));

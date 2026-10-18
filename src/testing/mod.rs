@@ -315,9 +315,9 @@ where
                 ]
                 .into_iter()
                 .find_map(identity)
-                .ok_or(Error::Other(
-                    format!("Account id could not be found for tx: {txid}").to_string(),
-                ))?;
+                .ok_or(Error::Other(format!(
+                    "Account id could not be found for tx: {txid}"
+                )))?;
 
                 let balance_gained: u64 = received_notes
                     .iter()
@@ -399,7 +399,7 @@ where
                     })?;
             }
             #[cfg(feature = "orchard")]
-            ShieldedProtocol::Ironwood => {
+            ShieldedPool::Ironwood => {
                 self.ironwood_tree
                     .store()
                     .for_each_checkpoint(usize::MAX, |id, cp| {

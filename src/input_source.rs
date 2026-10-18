@@ -9,7 +9,7 @@ use zcash_client_backend::{
 };
 use zcash_primitives::transaction::Transaction;
 use zcash_protocol::{
-    ShieldedPool::{self as ShieldedPool, Sapling},
+    ShieldedPool::{self, Sapling},
     consensus::{self, BranchId},
     value::Zatoshis,
 };
@@ -37,7 +37,7 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
     fn get_spendable_note(
         &self,
         txid: &zcash_primitives::transaction::TxId,
-        protocol: zcash_protocol::ShieldedPool,
+        protocol: ShieldedPool,
         index: u32,
         target_height: TargetHeight,
     ) -> Result<
@@ -101,7 +101,7 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
         &self,
         account: Self::AccountId,
         target_value: TargetValue,
-        sources: &[zcash_protocol::ShieldedPool],
+        sources: &[ShieldedPool],
         target_height: TargetHeight,
         confirmations_policy: ConfirmationsPolicy,
         exclude: &[Self::NoteRef],
@@ -134,11 +134,11 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
         };
 
         #[cfg(feature = "orchard")]
-        let ironwood_eligible_notes = if sources.contains(&ShieldedProtocol::Ironwood) {
+        let ironwood_eligible_notes = if sources.contains(&ShieldedPool::Ironwood) {
             self.select_spendable_notes_from_pool(
                 account,
                 target_value,
-                &ShieldedProtocol::Ironwood,
+                &ShieldedPool::Ironwood,
                 target_height,
                 confirmations_policy,
                 exclude,
@@ -294,7 +294,7 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         &self,
         account: AccountId,
         target_value: TargetValue,
-        pool: &zcash_protocol::ShieldedPool,
+        pool: &ShieldedPool,
         target_height: TargetHeight,
         confirmations_policy: ConfirmationsPolicy,
         exclude: &[NoteId],
