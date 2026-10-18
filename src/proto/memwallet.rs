@@ -341,12 +341,20 @@ pub struct TreeShard {
     pub shard_data: ::prost::alloc::vec::Vec<u8>,
 }
 /// A checkpoint in a shard tree
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TreeCheckpoint {
     #[prost(uint32, tag = "1")]
     pub checkpoint_id: u32,
+    /// The position of the checkpointed leaf. Meaningless when `tree_empty` is set.
     #[prost(uint64, tag = "2")]
     pub position: u64,
+    /// Set for a checkpoint of the empty tree. Blobs written before this field existed
+    /// stored such checkpoints as position 0; they decode as before, at position 0.
+    #[prost(bool, tag = "3")]
+    pub tree_empty: bool,
+    /// The positions whose marks were removed as of this checkpoint.
+    #[prost(uint64, repeated, tag = "4")]
+    pub marks_removed: ::prost::alloc::vec::Vec<u64>,
 }
 /// Stores the block height corresponding to the last note commitment in a shard
 /// as defined by its level and index in the tree

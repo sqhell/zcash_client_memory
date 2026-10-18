@@ -18,7 +18,13 @@ message TreeShard {
 // A checkpoint in a shard tree
 message TreeCheckpoint {
   uint32 checkpoint_id = 1;
+  // The position of the checkpointed leaf. Meaningless when `tree_empty` is set.
   uint64 position = 2;
+  // Set for a checkpoint of the empty tree. Blobs written before this field existed
+  // stored such checkpoints as position 0; they decode as before, at position 0.
+  bool tree_empty = 3;
+  // The positions whose marks were removed as of this checkpoint.
+  repeated uint64 marks_removed = 4;
 }
 
 // Stores the block height corresponding to the last note commitment in a shard

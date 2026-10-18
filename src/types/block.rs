@@ -49,19 +49,23 @@ mod serialization {
     use crate::read_optional;
 
     impl From<&MemoryWalletBlock> for proto::WalletBlock {
+        /// The transactions and memos are hash collections, so they are sorted on the way out:
+        /// the same wallet state must always encode to the same bytes.
         fn from(block: &MemoryWalletBlock) -> Self {
+            let mut transactions: Vec<&TxId> = block._transactions.iter().collect();
+            transactions.sort();
+            let mut memos: Vec<(&NoteId, &MemoBytes)> = block._memos.iter().collect();
+            memos.sort_by_key(|(note_id, _)| **note_id);
             Self {
                 height: block.height.into(),
                 hash: block.hash.0.to_vec(),
                 block_time: block.block_time,
-                transactions: block
-                    ._transactions
-                    .iter()
+                transactions: transactions
+                    .into_iter()
                     .map(|txid| txid.as_ref().to_vec())
                     .collect(),
-                memos: block
-                    ._memos
-                    .iter()
+                memos: memos
+                    .into_iter()
                     .map(|(note_id, memo)| proto::Memo {
                         note_id: Some((*note_id).into()),
                         memo: memo.as_array().to_vec(),

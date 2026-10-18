@@ -429,6 +429,16 @@ where
 
         assert_eq!(self, &recovered_wallet);
 
+        // `PartialEq` skips the note commitment trees, so compare their wire form too: the
+        // recovered wallet must encode to exactly the bytes it was decoded from, which covers
+        // every tree's cap, shards and checkpoints (including empty-tree checkpoints and
+        // removed marks).
+        assert_eq!(
+            recovered_wallet.encode_to_vec().unwrap(),
+            bytes,
+            "re-encoding the decoded wallet must reproduce the original blob"
+        );
+
         // ensure the trees can be roundtripped
         use crate::wallet_commitment_trees::serialization::{tree_from_protobuf, tree_to_protobuf};
 

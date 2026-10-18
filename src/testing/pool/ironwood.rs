@@ -9,7 +9,7 @@ use std::convert::Infallible;
 
 use shardtree::{
     ShardTree,
-    store::{ShardStore, memory::MemoryShardStore},
+    store::{ShardStore, TreeState, memory::MemoryShardStore},
 };
 use zcash_client_backend::{
     data_api::{
@@ -48,15 +48,22 @@ fn ironwood_active_network() -> LocalNetwork {
 }
 
 fn ironwood_checkpoint_heights(wallet: &MemoryWalletDb<LocalNetwork>) -> Vec<BlockHeight> {
+    ironwood_checkpoints(wallet)
+        .into_iter()
+        .map(|(height, _)| height)
+        .collect()
+}
+
+fn ironwood_checkpoints(wallet: &MemoryWalletDb<LocalNetwork>) -> Vec<(BlockHeight, TreeState)> {
     let store = wallet.ironwood_tree.store();
-    let mut heights = vec![];
+    let mut checkpoints = vec![];
     store
-        .for_each_checkpoint(store.checkpoint_count().unwrap(), |height, _| {
-            heights.push(*height);
+        .for_each_checkpoint(store.checkpoint_count().unwrap(), |height, checkpoint| {
+            checkpoints.push((*height, checkpoint.tree_state()));
             Ok(())
         })
         .unwrap();
-    heights
+    checkpoints
 }
 
 /// Scanning a block containing an Ironwood (version 3) note stores it as an Ironwood-pool
@@ -332,4 +339,40 @@ fn truncate_succeeds_when_ironwood_tree_has_no_checkpoints() {
         ironwood_checkpoint_heights(st.wallet()),
         vec![h0 - 1, h0, h0 + 1, h0 + 2]
     );
+}
+
+/// Before NU6.3 activates, every scanned block checkpoints the empty Ironwood tree. Those
+/// checkpoints must come back from persistence as empty-tree checkpoints: the old encoding
+/// wrote them as position 0, which reads back as a one-leaf tree state and so as a different
+/// anchor than the one the wallet checkpointed.
+#[test]
+fn empty_ironwood_checkpoints_survive_persistence() {
+    // The default test network never activates NU6.3.
+    let mut st = TestBuilder::new()
+        .with_data_store_factory(TestMemDbFactory::new())
+        .with_block_cache(MemBlockCache::new())
+        .with_account_from_sapling_activation(BlockHash([0; 32]))
+        .build();
+    assert!(st.network().nu6_3.is_none());
+
+    let dfvk = OrchardPoolTester::test_account_fvk(&st);
+    let (h, _, _) = st.generate_next_block(
+        &dfvk,
+        AddressType::DefaultExternal,
+        Zatoshis::const_from_u64(60_000),
+    );
+    st.scan_cached_blocks(h, 1);
+
+    let checkpoints = ironwood_checkpoints(st.wallet());
+    assert!(!checkpoints.is_empty());
+    assert!(
+        checkpoints
+            .iter()
+            .all(|(_, state)| *state == TreeState::Empty),
+        "before activation the Ironwood tree only has empty-tree checkpoints: {checkpoints:?}"
+    );
+
+    let bytes = st.wallet().encode_to_vec().unwrap();
+    let recovered = MemoryWalletDb::decode_new(&bytes[..], *st.wallet().params(), 100).unwrap();
+    assert_eq!(ironwood_checkpoints(&recovered), checkpoints);
 }
