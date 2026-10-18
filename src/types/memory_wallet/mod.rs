@@ -847,16 +847,11 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         chain_tip_height: BlockHeight,
         min_confirmations: NonZeroU32,
     ) -> Result<Option<BlockHeight>, Error> {
-        let max_checkpoint_height =
-            u32::from(chain_tip_height).saturating_sub(u32::from(min_confirmations) - 1);
-        // scan backward and find the first checkpoint that matches a blockheight prior to max_checkpoint_height
-        for height in (0..=max_checkpoint_height).rev() {
-            let height = BlockHeight::from_u32(height);
-            if self.sapling_tree.store().get_checkpoint(&height)?.is_some() {
-                return Ok(Some(height));
-            }
-        }
-        Ok(None)
+        max_checkpointed_height(
+            self.sapling_tree.store(),
+            chain_tip_height,
+            min_confirmations,
+        )
     }
 
     #[cfg(feature = "orchard")]
@@ -865,16 +860,11 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         chain_tip_height: BlockHeight,
         min_confirmations: NonZeroU32,
     ) -> Result<Option<BlockHeight>, Error> {
-        let max_checkpoint_height =
-            u32::from(chain_tip_height).saturating_sub(u32::from(min_confirmations) - 1);
-        // scan backward and find the first checkpoint that matches a blockheight prior to max_checkpoint_height
-        for height in (0..=max_checkpoint_height).rev() {
-            let height = BlockHeight::from_u32(height);
-            if self.orchard_tree.store().get_checkpoint(&height)?.is_some() {
-                return Ok(Some(height));
-            }
-        }
-        Ok(None)
+        max_checkpointed_height(
+            self.orchard_tree.store(),
+            chain_tip_height,
+            min_confirmations,
+        )
     }
 
     #[cfg(feature = "orchard")]
@@ -883,21 +873,11 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         chain_tip_height: BlockHeight,
         min_confirmations: NonZeroU32,
     ) -> Result<Option<BlockHeight>, Error> {
-        let max_checkpoint_height =
-            u32::from(chain_tip_height).saturating_sub(u32::from(min_confirmations) - 1);
-        // scan backward and find the first checkpoint that matches a blockheight prior to max_checkpoint_height
-        for height in (0..=max_checkpoint_height).rev() {
-            let height = BlockHeight::from_u32(height);
-            if self
-                .ironwood_tree
-                .store()
-                .get_checkpoint(&height)?
-                .is_some()
-            {
-                return Ok(Some(height));
-            }
-        }
-        Ok(None)
+        max_checkpointed_height(
+            self.ironwood_tree.store(),
+            chain_tip_height,
+            min_confirmations,
+        )
     }
 
     /// Get the unscanned ranges from the scan queue and their corresponding sapling tree indices
@@ -1494,6 +1474,32 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
     pub fn get_block_time(&self, height: BlockHeight) -> Option<u32> {
         self.blocks.get(&height).map(|block| block.block_time)
     }
+}
+
+/// Returns the greatest checkpoint height in `store` whose block has at least
+/// `min_confirmations` confirmations at `chain_tip_height`, or `None` if the tree has no such
+/// checkpoint.
+///
+/// Only the tree's checkpoints are visited, of which there are at most `max_checkpoints`. Probing
+/// every block height downwards from the tip would walk the whole chain whenever the tree has no
+/// checkpoints, which is the state of the Orchard tree before NU5 and of the Ironwood tree before
+/// NU6.3 or in a wallet restored from a snapshot taken before Ironwood support.
+fn max_checkpointed_height<H: Clone>(
+    store: &MemoryShardStore<H, BlockHeight>,
+    chain_tip_height: BlockHeight,
+    min_confirmations: NonZeroU32,
+) -> Result<Option<BlockHeight>, Error> {
+    let max_checkpoint_height = BlockHeight::from_u32(
+        u32::from(chain_tip_height).saturating_sub(u32::from(min_confirmations) - 1),
+    );
+    let mut result: Option<BlockHeight> = None;
+    store.for_each_checkpoint(store.checkpoint_count()?, |height, _| {
+        if *height <= max_checkpoint_height {
+            result = Some(result.map_or(*height, |r| r.max(*height)));
+        }
+        Ok(())
+    })?;
+    Ok(result)
 }
 
 #[cfg(test)]
