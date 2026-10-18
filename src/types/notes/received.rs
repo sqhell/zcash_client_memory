@@ -253,7 +253,7 @@ impl ReceivedNote {
             output_index: output.index() as u32,
             account_id: *output.account(),
             note: Note::Orchard { note, pool },
-            nf: None, // Nullifier not yet known for incoming unspent notes
+            nf: None,         // Nullifier not yet known for incoming unspent notes
             is_change: false, // Incoming notes are not change
             memo,
             commitment_tree_position: None, // Position not yet known

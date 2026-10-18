@@ -109,9 +109,7 @@ mod serialization {
                         Ok((
                             NoteId::new(
                                 read_optional!(note_id.clone(), tx_id)?.try_into()?,
-                                crate::types::notes::shielded_protocol_from_proto(
-                                    note_id.pool(),
-                                )?,
+                                crate::types::notes::shielded_protocol_from_proto(note_id.pool())?,
                                 note_id.output_index as u16,
                             ),
                             MemoBytes::from_bytes(&memo.memo)?,

@@ -237,11 +237,7 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         }
 
         #[cfg(feature = "orchard")]
-        if let Some(frontier) = birthday
-            .prior_chain_state()
-            .final_ironwood_tree()
-            .value()
-        {
+        if let Some(frontier) = birthday.prior_chain_state().final_ironwood_tree().value() {
             tracing::debug!("Inserting Ironwood frontier into ShardTree: {:?}", frontier);
             self.ironwood_tree.insert_frontier_nodes(
                 frontier.clone(),
@@ -855,7 +851,12 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         // scan backward and find the first checkpoint that matches a blockheight prior to max_checkpoint_height
         for height in (0..=max_checkpoint_height).rev() {
             let height = BlockHeight::from_u32(height);
-            if self.ironwood_tree.store().get_checkpoint(&height)?.is_some() {
+            if self
+                .ironwood_tree
+                .store()
+                .get_checkpoint(&height)?
+                .is_some()
+            {
                 return Ok(Some(height));
             }
         }
@@ -1267,7 +1268,9 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
                 .blocks
                 .iter()
                 .filter(|(height, _)| height > &birthday_height)
-                .fold(0_u64, |acc, (_, block)| acc + u64::from(action_count(block)));
+                .fold(0_u64, |acc, (_, block)| {
+                    acc + u64::from(action_count(block))
+                });
 
             // We don't have complete information on how many outputs will exist in the shard at
             // the chain tip without having scanned the chain tip block, so we overestimate by

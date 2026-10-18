@@ -152,7 +152,8 @@ mod serialization {
                     Self::Sapling(sapling::Note::from_parts(recipient, value, rseed))
                 }
                 #[cfg(feature = "orchard")]
-                protocol @ (proto::ShieldedProtocol::Orchard | proto::ShieldedProtocol::Ironwood) => {
+                protocol @ (proto::ShieldedProtocol::Orchard
+                | proto::ShieldedProtocol::Ironwood) => {
                     let pool = match protocol {
                         proto::ShieldedProtocol::Ironwood => orchard::ValuePool::Ironwood,
                         _ => orchard::ValuePool::Orchard,
