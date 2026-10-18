@@ -1126,7 +1126,7 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
     /// This should only be executed inside a transactional context.
     fn truncate_to_height(&mut self, max_height: BlockHeight) -> Result<BlockHeight, Self::Error> {
         let truncation_height = {
-            // This is the intersection of all the checkpoint heights from the sapling and orchard tree.
+            // The intersection of the checkpoint heights of every tree that has checkpoints.
             let mut checkpoint_heights = BTreeSet::new();
             self.sapling_tree.store().for_each_checkpoint(
                 self.sapling_tree.store().checkpoint_count()?,
@@ -1137,33 +1137,23 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
             )?;
             #[cfg(feature = "orchard")]
             {
-                let mut orchard_checkpoint_heights = BTreeSet::new();
-                self.orchard_tree.store().for_each_checkpoint(
-                    self.orchard_tree.store().checkpoint_count()?,
-                    |height, _| {
-                        orchard_checkpoint_heights.insert(u32::from(*height));
+                // A tree without checkpoints has nothing to roll back and must not veto the
+                // rewind, as in `zcash_client_sqlite`: the Orchard tree is empty before NU5 and
+                // the Ironwood tree before NU6.3, or in a wallet restored from a snapshot taken
+                // before Ironwood support that has not scanned a block since.
+                for store in [self.orchard_tree.store(), self.ironwood_tree.store()] {
+                    let mut tree_checkpoint_heights = BTreeSet::new();
+                    store.for_each_checkpoint(store.checkpoint_count()?, |height, _| {
+                        tree_checkpoint_heights.insert(u32::from(*height));
                         Ok(())
-                    },
-                )?;
-
-                checkpoint_heights = checkpoint_heights
-                    .intersection(&orchard_checkpoint_heights)
-                    .copied()
-                    .collect();
-
-                let mut ironwood_checkpoint_heights = BTreeSet::new();
-                self.ironwood_tree.store().for_each_checkpoint(
-                    self.ironwood_tree.store().checkpoint_count()?,
-                    |height, _| {
-                        ironwood_checkpoint_heights.insert(u32::from(*height));
-                        Ok(())
-                    },
-                )?;
-
-                checkpoint_heights = checkpoint_heights
-                    .intersection(&ironwood_checkpoint_heights)
-                    .copied()
-                    .collect();
+                    })?;
+                    if !tree_checkpoint_heights.is_empty() {
+                        checkpoint_heights = checkpoint_heights
+                            .intersection(&tree_checkpoint_heights)
+                            .copied()
+                            .collect();
+                    }
+                }
             }
             // All the checkpoints that are greater than the truncation height
             let over = checkpoint_heights.split_off(&(u32::from(max_height + 1)));
