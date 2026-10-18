@@ -90,8 +90,8 @@ mod serialization {
         }
     }
 
-    impl From<Note> for proto::Note {
-        fn from(note: Note) -> Self {
+    impl From<&Note> for proto::Note {
+        fn from(note: &Note) -> Self {
             match note {
                 Note::Sapling(note) => Self {
                     protocol: proto::ShieldedProtocol::Sapling.into(),
@@ -234,7 +234,7 @@ mod serialization {
                 sapling::Rseed::AfterZip212([0; 32]),
             ));
 
-            let proto_note: proto::Note = note.clone().into();
+            let proto_note: proto::Note = (&note).into();
             let recovered: Note = proto_note.try_into().unwrap();
 
             assert_eq!(note, recovered);

@@ -38,8 +38,8 @@ mod serialization {
         zcash_protocol::consensus::Network::MainNetwork as EncodingParams,
     };
 
-    impl From<TransactionDataRequest> for proto::TransactionDataRequest {
-        fn from(request: TransactionDataRequest) -> Self {
+    impl From<&TransactionDataRequest> for proto::TransactionDataRequest {
+        fn from(request: &TransactionDataRequest) -> Self {
             match request {
                 TransactionDataRequest::GetStatus(txid) => Self {
                     request_type: proto::TransactionDataRequestType::GetStatus as i32,

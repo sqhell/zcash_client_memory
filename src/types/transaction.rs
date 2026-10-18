@@ -261,8 +261,8 @@ mod serialization {
     use super::*;
     use crate::{error::proto_enum, proto::memwallet as proto, read_optional};
 
-    impl From<TransactionEntry> for proto::TransactionEntry {
-        fn from(entry: TransactionEntry) -> Self {
+    impl From<&TransactionEntry> for proto::TransactionEntry {
+        fn from(entry: &TransactionEntry) -> Self {
             Self {
                 tx_status: match entry.tx_status {
                     TransactionStatus::TxidNotRecognized => {
@@ -276,7 +276,7 @@ mod serialization {
                 block: entry.block.map(Into::into),
                 tx_index: entry.tx_index,
                 expiry_height: entry.expiry_height.map(Into::into),
-                raw_tx: entry.raw,
+                raw_tx: entry.raw.clone(),
                 fee: entry.fee.map(Into::into),
                 target_height: entry._target_height.map(Into::into),
                 mined_height: match entry.tx_status {

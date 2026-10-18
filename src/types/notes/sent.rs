@@ -204,11 +204,11 @@ mod serialization {
         zcash_protocol::consensus::Network::MainNetwork as EncodingParams,
     };
 
-    impl From<SentNote> for proto::SentNote {
-        fn from(note: SentNote) -> Self {
+    impl From<&SentNote> for proto::SentNote {
+        fn from(note: &SentNote) -> Self {
             Self {
                 from_account_id: *note.from_account_id,
-                to: Some(note.to.into()),
+                to: Some((&note.to).into()),
                 value: note.value.into(),
                 memo: note.memo.encode().as_array().to_vec(),
             }
@@ -228,8 +228,8 @@ mod serialization {
         }
     }
 
-    impl From<SentNoteId> for proto::NoteId {
-        fn from(note_id: SentNoteId) -> Self {
+    impl From<&SentNoteId> for proto::NoteId {
+        fn from(note_id: &SentNoteId) -> Self {
             match note_id {
                 SentNoteId::Shielded(note_id) => proto::NoteId {
                     tx_id: Some(note_id.txid().into()),
@@ -242,7 +242,7 @@ mod serialization {
                 },
                 SentNoteId::Transparent { txid, output_index } => proto::NoteId {
                     tx_id: Some(txid.into()),
-                    output_index,
+                    output_index: *output_index,
                     pool: proto::PoolType::Transparent as i32,
                 },
             }
@@ -267,8 +267,8 @@ mod serialization {
         }
     }
 
-    impl From<OutPoint> for proto::OutPoint {
-        fn from(outpoint: OutPoint) -> Self {
+    impl From<&OutPoint> for proto::OutPoint {
+        fn from(outpoint: &OutPoint) -> Self {
             Self {
                 hash: outpoint.txid().as_ref().to_vec(),
                 n: outpoint.n(),
@@ -284,8 +284,8 @@ mod serialization {
         }
     }
 
-    impl From<Recipient<AccountId>> for proto::Recipient {
-        fn from(recipient: Recipient<AccountId>) -> Self {
+    impl From<&Recipient<AccountId>> for proto::Recipient {
+        fn from(recipient: &Recipient<AccountId>) -> Self {
             match recipient {
                 Recipient::External {
                     recipient_address,
@@ -294,7 +294,7 @@ mod serialization {
                     recipient_type: proto::RecipientType::ExternalRecipient as i32,
 
                     address: Some(recipient_address.to_string()),
-                    pool_type: Some(match output_pool {
+                    pool_type: Some(match *output_pool {
                         PoolType::Transparent => proto::PoolType::Transparent,
                         PoolType::Shielded(Sapling) => proto::PoolType::ShieldedSapling,
                         PoolType::Shielded(ShieldedPool::Orchard) => {
@@ -320,7 +320,7 @@ mod serialization {
                     address: Some(ephemeral_address.encode(&EncodingParams)),
                     pool_type: Some(proto::PoolType::Transparent as i32),
 
-                    account_id: Some(*receiving_account),
+                    account_id: Some(**receiving_account),
                     outpoint: Some(outpoint.into()),
                     note: None,
                 },
@@ -334,7 +334,7 @@ mod serialization {
                     address: Some(recipient_address.encode(&EncodingParams)),
                     pool_type: Some(proto::PoolType::Transparent as i32),
 
-                    account_id: Some(*receiving_account),
+                    account_id: Some(**receiving_account),
                     outpoint: None,
                     note: None,
                 },
@@ -345,12 +345,12 @@ mod serialization {
                 } => proto::Recipient {
                     recipient_type: proto::RecipientType::InternalAccount as i32,
 
-                    address: external_address.map(|a| a.to_string()),
+                    address: external_address.as_ref().map(|a| a.to_string()),
                     pool_type: None,
 
-                    account_id: Some(*receiving_account),
+                    account_id: Some(**receiving_account),
                     outpoint: None,
-                    note: Some(note.deref().clone().into()),
+                    note: Some(note.deref().into()),
                 },
             }
         }
@@ -426,9 +426,9 @@ mod serialization {
                 recipient_address: ZcashAddress::try_from_encoded("uregtest1a7mkafdn9c87xywjnyup65uker8tx3y72r9f6elcfm6uh263c9s6smcw6xm5m8k8eythcreuyqktp9z7mtpcd6jsm5xw7skgdcfjx84z").unwrap(),
                 output_pool: PoolType::Shielded(ShieldedPool::Sapling),
         };
-            let proto = proto::Recipient::from(recipient.clone());
+            let proto = proto::Recipient::from(&recipient);
             let recipient2 = Recipient::<AccountId>::try_from(proto.clone()).unwrap();
-            let proto2 = proto::Recipient::from(recipient2.clone());
+            let proto2 = proto::Recipient::from(&recipient2);
             assert_eq!(proto, proto2);
         }
     }

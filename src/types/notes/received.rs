@@ -728,14 +728,14 @@ mod serialization {
     use super::*;
     use crate::{error::proto_enum, proto::memwallet as proto, read_optional};
 
-    impl From<ReceivedNote> for proto::ReceivedNote {
-        fn from(value: ReceivedNote) -> Self {
+    impl From<&ReceivedNote> for proto::ReceivedNote {
+        fn from(value: &ReceivedNote) -> Self {
             Self {
                 note_id: Some(value.note_id.into()),
                 tx_id: Some(value.txid.into()),
                 output_index: value.output_index,
                 account_id: *value.account_id,
-                note: Some(value.note.into()),
+                note: Some((&value.note).into()),
                 nullifier: value.nf.map(|nf| nf.into()),
                 is_change: value.is_change,
                 memo: value.memo.encode().as_array().to_vec(),

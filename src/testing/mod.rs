@@ -417,9 +417,9 @@ where
 
     fn finally(&self) {
         // ensure the wallet state at the conclusion of each test can be round-tripped through serialization
-        let proto = crate::proto::memwallet::MemoryWallet::from(self);
-        let recovered_wallet =
-            MemoryWalletDb::new_from_proto(proto.clone(), self.params.clone(), 100).unwrap();
+        let bytes = self.encode_to_vec().unwrap();
+        let recovered_wallet = MemoryWalletDb::decode_new(&bytes[..], self.params.clone(), 100)
+            .expect("the wallet decodes from its own encoding");
 
         assert_eq!(self, &recovered_wallet);
 

@@ -595,16 +595,18 @@ mod serialization {
     use crate::proto::memwallet as proto;
     use crate::read_optional;
 
-    impl From<Accounts> for proto::Accounts {
-        fn from(accounts: Accounts) -> Self {
-            Self {
+    impl TryFrom<&Accounts> for proto::Accounts {
+        type Error = crate::Error;
+
+        fn try_from(accounts: &Accounts) -> Result<Self, Self::Error> {
+            Ok(Self {
                 account_nonce: accounts.nonce,
                 accounts: accounts
                     .accounts
-                    .into_values()
-                    .map(|acc| acc.into())
-                    .collect(),
-            }
+                    .values()
+                    .map(proto::Account::try_from)
+                    .collect::<Result<_, Error>>()?,
+            })
         }
     }
 
@@ -623,14 +625,18 @@ mod serialization {
         }
     }
 
-    impl From<Account> for proto::Account {
-        fn from(acc: Account) -> Self {
-            Self {
+    impl TryFrom<&Account> for proto::Account {
+        type Error = crate::Error;
+
+        /// Fails if the birthday's tree frontiers cannot be written, which would otherwise
+        /// produce a blob that decodes with a missing birthday.
+        fn try_from(acc: &Account) -> Result<Self, Self::Error> {
+            Ok(Self {
                 account_name: acc.account_name.clone(),
                 account_id: *acc.account_id,
                 kind: match acc.kind {
-                    AccountSource::Derived { .. } => 0,
-                    AccountSource::Imported { .. } => 1,
+                    AccountSource::Derived { .. } => proto::AccountKind::Derived as i32,
+                    AccountSource::Imported { .. } => proto::AccountKind::Imported as i32,
                 },
                 seed_fingerprint: match acc.kind {
                     AccountSource::Derived { ref derivation, .. } => {
@@ -657,8 +663,10 @@ mod serialization {
                 purpose: match acc.kind {
                     AccountSource::Derived { .. } => None,
                     AccountSource::Imported { ref purpose, .. } => match purpose {
-                        AccountPurpose::Spending { .. } => Some(0),
-                        AccountPurpose::ViewOnly => Some(1),
+                        AccountPurpose::Spending { .. } => {
+                            Some(proto::AccountPurpose::Spending as i32)
+                        }
+                        AccountPurpose::ViewOnly => Some(proto::AccountPurpose::ViewOnly as i32),
                     },
                 },
                 key_source: match acc.kind {
@@ -667,7 +675,7 @@ mod serialization {
                 }
                 .clone(),
                 viewing_key: acc.viewing_key.encode(&EncodingParams),
-                birthday: acc.birthday().clone().try_into().ok(),
+                birthday: Some(acc.birthday().try_into()?),
                 addresses: acc
                     .addresses()
                     .iter()
@@ -679,9 +687,9 @@ mod serialization {
                 #[cfg(feature = "transparent-inputs")]
                 ephemeral_addresses: acc
                     .ephemeral_addresses
-                    .into_iter()
+                    .iter()
                     .map(|(index, address)| proto::EphemeralAddressRecord {
-                        index,
+                        index: *index,
                         ephemeral_address: Some(proto::EphemeralAddress {
                             address: address.address.encode(&EncodingParams),
                             used_in_tx: address.used.map(|u| u.as_ref().to_vec()),
@@ -691,7 +699,7 @@ mod serialization {
                     .collect(),
                 #[cfg(not(feature = "transparent-inputs"))]
                 ephemeral_addresses: Default::default(),
-            }
+            })
         }
     }
 
@@ -790,9 +798,9 @@ mod serialization {
         }
     }
 
-    impl TryFrom<AccountBirthday> for proto::AccountBirthday {
+    impl TryFrom<&AccountBirthday> for proto::AccountBirthday {
         type Error = crate::Error;
-        fn try_from(birthday: AccountBirthday) -> Result<Self, Self::Error> {
+        fn try_from(birthday: &AccountBirthday) -> Result<Self, Self::Error> {
             let cstate = birthday.prior_chain_state();
 
             let mut sapling_tree_bytes = vec![];
@@ -881,17 +889,15 @@ mod serialization {
             )
             .unwrap();
 
-            let proto_acc: proto::Account = acc.clone().into();
+            let proto_acc = proto::Account::try_from(&acc).unwrap();
             let acc2: Account = proto_acc.clone().try_into().unwrap();
-            let proto_acc2: proto::Account = acc2.clone().into();
+            let proto_acc2 = proto::Account::try_from(&acc2).unwrap();
 
             assert_eq!(proto_acc, proto_acc2);
         }
 
         #[test]
-        fn test_account_birthday_serialization_handles_none_gracefully() {
-            // Test that birthday serialization uses .ok() instead of .unwrap()
-            // to handle edge cases gracefully
+        fn account_serialization_always_carries_the_birthday() {
             let acc = Account::new(
                 "test_account".to_string(),
                 AccountId(1),
@@ -907,14 +913,10 @@ mod serialization {
             )
             .unwrap();
 
-            // Verify serialization doesn't panic
-            let proto_acc: proto::Account = acc.clone().into();
-
-            // Birthday should be present for valid accounts
-            assert!(
-                proto_acc.birthday.is_some() || proto_acc.birthday.is_none(),
-                "Birthday field should serialize without panicking"
-            );
+            // A blob without the birthday cannot be decoded, so encoding must either write it
+            // or fail; it must never silently drop it.
+            let proto_acc = proto::Account::try_from(&acc).unwrap();
+            assert!(proto_acc.birthday.is_some());
         }
 
         fn imported_proto_account(purpose: AccountPurpose) -> proto::Account {
@@ -932,7 +934,7 @@ mod serialization {
                 ),
             )
             .unwrap();
-            acc.into()
+            proto::Account::try_from(&acc).unwrap()
         }
 
         #[test]
@@ -1008,7 +1010,7 @@ mod serialization {
             )
             .unwrap();
 
-            let proto_acc: proto::Account = acc.clone().into();
+            let proto_acc = proto::Account::try_from(&acc).unwrap();
             let acc2: Account = proto_acc.try_into().unwrap();
 
             assert_eq!(acc.account_name, acc2.account_name);

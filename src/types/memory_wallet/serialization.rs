@@ -11,10 +11,19 @@ use crate::wallet_commitment_trees::serialization::{tree_from_protobuf, tree_to_
 impl<P: Parameters> MemoryWalletDb<P> {
     /// Encode a memory wallet db as a protobuf byte buffer
     /// Always uses the latest version of the wire protocol
+    ///
+    /// Fails if any part of the wallet cannot be serialized; it never writes a partial blob.
     pub fn encode<B: BufMut>(&self, buf: &mut B) -> Result<()> {
-        let proto_wallet: proto::MemoryWallet = self.into();
+        let proto_wallet = proto::MemoryWallet::try_from(self)?;
         proto_wallet.encode(buf)?;
         Ok(())
+    }
+
+    /// Encode a memory wallet db into a new byte vector sized up front from the encoded length,
+    /// so a large wallet is written in one allocation instead of growing the buffer as it goes.
+    pub fn encode_to_vec(&self) -> Result<Vec<u8>> {
+        let proto_wallet = proto::MemoryWallet::try_from(self)?;
+        Ok(proto_wallet.encode_to_vec())
     }
 
     /// Create a mew memory wallet db from a protobuf encoded byte buffer with version awareness
@@ -285,33 +294,43 @@ impl TryFrom<proto::TxId> for TxId {
     }
 }
 
-impl<P: Parameters> From<&MemoryWalletDb<P>> for proto::MemoryWallet {
-    fn from(wallet: &MemoryWalletDb<P>) -> Self {
-        Self {
+/// Serializes the shard-end-height map of one note commitment tree.
+fn shard_end_heights_to_proto(
+    end_heights: &BTreeMap<Address, BlockHeight>,
+) -> Vec<proto::TreeEndHeightsRecord> {
+    end_heights
+        .iter()
+        .map(|(address, height)| proto::TreeEndHeightsRecord {
+            level: address.level().into(),
+            index: address.index(),
+            block_height: (*height).into(),
+        })
+        .collect()
+}
+
+impl<P: Parameters> TryFrom<&MemoryWalletDb<P>> for proto::MemoryWallet {
+    type Error = Error;
+
+    /// Builds the wire representation of the wallet by borrowing every table; nothing is cloned
+    /// except the bytes that end up in the message.
+    ///
+    /// Fails if a note commitment tree or an account birthday cannot be serialized. Encoding used
+    /// to drop such a tree silently, which produced a blob that could never be decoded.
+    fn try_from(wallet: &MemoryWalletDb<P>) -> Result<Self> {
+        Ok(Self {
             version: 1,
-            accounts: Some(proto::Accounts {
-                accounts: wallet
-                    .accounts
-                    .accounts
-                    .clone()
-                    .into_values()
-                    .map(proto::Account::from)
-                    .collect(),
-                account_nonce: wallet.accounts.nonce,
-            }),
+            accounts: Some(proto::Accounts::try_from(&wallet.accounts)?),
 
             blocks: wallet
                 .blocks
-                .clone()
-                .into_values()
+                .values()
                 .map(proto::WalletBlock::from)
                 .collect(),
 
             tx_table: wallet
                 .tx_table
                 .0
-                .clone()
-                .into_iter()
+                .iter()
                 .map(|(txid, tx)| proto::TransactionTableRecord {
                     tx_id: Some(txid.into()),
                     tx_entry: Some(tx.into()),
@@ -321,16 +340,15 @@ impl<P: Parameters> From<&MemoryWalletDb<P>> for proto::MemoryWallet {
             received_note_table: wallet
                 .received_notes
                 .iter()
-                .map(|note| proto::ReceivedNote::from(note.clone()))
+                .map(proto::ReceivedNote::from)
                 .collect(),
 
             received_note_spends: wallet
                 .received_note_spends
                 .0
-                .clone()
-                .into_iter()
+                .iter()
                 .map(|(note_id, tx_id)| proto::ReceivedNoteSpendRecord {
-                    note_id: Some(note_id.into()),
+                    note_id: Some((*note_id).into()),
                     tx_id: Some(tx_id.into()),
                 })
                 .collect(),
@@ -338,34 +356,31 @@ impl<P: Parameters> From<&MemoryWalletDb<P>> for proto::MemoryWallet {
             nullifiers: wallet
                 .nullifiers
                 .0
-                .clone()
-                .into_iter()
+                .iter()
                 .map(|(nullifier, (height, tx_index))| proto::NullifierRecord {
-                    block_height: height.into(),
-                    tx_index,
-                    nullifier: Some(nullifier.into()),
+                    block_height: (*height).into(),
+                    tx_index: *tx_index,
+                    nullifier: Some((*nullifier).into()),
                 })
                 .collect(),
 
             sent_notes: wallet
                 .sent_notes
                 .0
-                .clone()
-                .into_iter()
+                .iter()
                 .map(|(id, note)| proto::SentNoteRecord {
                     sent_note_id: Some(id.into()),
-                    sent_note: Some(proto::SentNote::from(note)),
+                    sent_note: Some(note.into()),
                 })
                 .collect(),
 
             tx_locator: wallet
                 .tx_locator
                 .0
-                .clone()
-                .into_iter()
+                .iter()
                 .map(|((height, tx_index), txid)| proto::TxLocatorRecord {
-                    block_height: height.into(),
-                    tx_index,
+                    block_height: (*height).into(),
+                    tx_index: *tx_index,
                     tx_id: Some(txid.into()),
                 })
                 .collect(),
@@ -376,65 +391,43 @@ impl<P: Parameters> From<&MemoryWalletDb<P>> for proto::MemoryWallet {
                 .map(|r| proto::ScanQueueRecord::from(*r))
                 .collect(),
 
-            sapling_tree: tree_to_protobuf(&wallet.sapling_tree).ok().flatten(),
-            sapling_tree_shard_end_heights: wallet
-                .sapling_tree_shard_end_heights
-                .clone()
-                .into_iter()
-                .map(|(address, height)| proto::TreeEndHeightsRecord {
-                    level: address.level().into(),
-                    index: address.index(),
-                    block_height: height.into(),
-                })
-                .collect(),
+            sapling_tree: tree_to_protobuf(&wallet.sapling_tree)?,
+            sapling_tree_shard_end_heights: shard_end_heights_to_proto(
+                &wallet.sapling_tree_shard_end_heights,
+            ),
 
             #[cfg(feature = "orchard")]
-            orchard_tree: tree_to_protobuf(&wallet.orchard_tree).ok().flatten(),
+            orchard_tree: tree_to_protobuf(&wallet.orchard_tree)?,
             #[cfg(not(feature = "orchard"))]
             orchard_tree: None,
 
             #[cfg(feature = "orchard")]
-            orchard_tree_shard_end_heights: wallet
-                .orchard_tree_shard_end_heights
-                .clone()
-                .into_iter()
-                .map(|(address, height)| proto::TreeEndHeightsRecord {
-                    level: address.level().into(),
-                    index: address.index(),
-                    block_height: height.into(),
-                })
-                .collect(),
+            orchard_tree_shard_end_heights: shard_end_heights_to_proto(
+                &wallet.orchard_tree_shard_end_heights,
+            ),
             #[cfg(not(feature = "orchard"))]
             orchard_tree_shard_end_heights: Vec::new(),
 
             #[cfg(feature = "orchard")]
-            ironwood_tree: tree_to_protobuf(&wallet.ironwood_tree).ok().flatten(),
+            ironwood_tree: tree_to_protobuf(&wallet.ironwood_tree)?,
             #[cfg(not(feature = "orchard"))]
             ironwood_tree: None,
 
             #[cfg(feature = "orchard")]
-            ironwood_tree_shard_end_heights: wallet
-                .ironwood_tree_shard_end_heights
-                .clone()
-                .into_iter()
-                .map(|(address, height)| proto::TreeEndHeightsRecord {
-                    level: address.level().into(),
-                    index: address.index(),
-                    block_height: height.into(),
-                })
-                .collect(),
+            ironwood_tree_shard_end_heights: shard_end_heights_to_proto(
+                &wallet.ironwood_tree_shard_end_heights,
+            ),
             #[cfg(not(feature = "orchard"))]
             ironwood_tree_shard_end_heights: Vec::new(),
 
             transparent_received_outputs: wallet
                 .transparent_received_outputs
                 .0
-                .clone()
-                .into_iter()
+                .iter()
                 .map(
                     |(outpoint, output)| proto::TransparentReceivedOutputRecord {
-                        outpoint: Some(proto::OutPoint::from(outpoint)),
-                        output: Some(proto::ReceivedTransparentOutput::from(output)),
+                        outpoint: Some(outpoint.into()),
+                        output: Some(output.into()),
                     },
                 )
                 .collect(),
@@ -442,11 +435,10 @@ impl<P: Parameters> From<&MemoryWalletDb<P>> for proto::MemoryWallet {
             transparent_received_output_spends: wallet
                 .transparent_received_output_spends
                 .0
-                .clone()
-                .into_iter()
+                .iter()
                 .map(
                     |(outpoint, txid)| proto::TransparentReceivedOutputSpendRecord {
-                        outpoint: Some(proto::OutPoint::from(outpoint)),
+                        outpoint: Some(outpoint.into()),
                         tx_id: Some(txid.into()),
                     },
                 )
@@ -455,22 +447,20 @@ impl<P: Parameters> From<&MemoryWalletDb<P>> for proto::MemoryWallet {
             transparent_spend_map: wallet
                 .transparent_spend_map
                 .0
-                .clone()
-                .into_iter()
+                .iter()
                 .map(|(txid, outpoint)| proto::TransparentSpendCacheRecord {
                     tx_id: Some(txid.into()),
-                    outpoint: Some(proto::OutPoint::from(outpoint)),
+                    outpoint: Some(outpoint.into()),
                 })
                 .collect(),
 
             transaction_data_requests: wallet
                 .transaction_data_request_queue
                 .0
-                .clone()
-                .into_iter()
+                .iter()
                 .map(Into::into)
                 .collect(),
-        }
+        })
     }
 }
 
@@ -482,7 +472,7 @@ mod tests {
     #[test]
     fn decode_rejects_unknown_scan_priority() {
         let wallet = MemoryWalletDb::new(Network::TestNetwork, 100);
-        let mut proto_wallet = proto::MemoryWallet::from(&wallet);
+        let mut proto_wallet = proto::MemoryWallet::try_from(&wallet).unwrap();
         proto_wallet.scan_queue.push(proto::ScanQueueRecord {
             start_height: 10,
             end_height: 20,

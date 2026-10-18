@@ -48,22 +48,22 @@ mod serialization {
     use crate::proto::memwallet as proto;
     use crate::read_optional;
 
-    impl From<MemoryWalletBlock> for proto::WalletBlock {
-        fn from(block: MemoryWalletBlock) -> Self {
+    impl From<&MemoryWalletBlock> for proto::WalletBlock {
+        fn from(block: &MemoryWalletBlock) -> Self {
             Self {
                 height: block.height.into(),
                 hash: block.hash.0.to_vec(),
                 block_time: block.block_time,
                 transactions: block
                     ._transactions
-                    .into_iter()
+                    .iter()
                     .map(|txid| txid.as_ref().to_vec())
                     .collect(),
                 memos: block
                     ._memos
-                    .into_iter()
+                    .iter()
                     .map(|(note_id, memo)| proto::Memo {
-                        note_id: Some(note_id.into()),
+                        note_id: Some((*note_id).into()),
                         memo: memo.as_array().to_vec(),
                     })
                     .collect(),
@@ -149,7 +149,7 @@ mod serialization {
                 ironwood_action_count: Some(8),
             };
 
-            let proto: proto::WalletBlock = block.clone().into();
+            let proto: proto::WalletBlock = (&block).into();
             let recovered: MemoryWalletBlock = proto.clone().try_into().unwrap();
 
             assert_eq!(block, recovered);

@@ -206,8 +206,7 @@ pub(crate) mod serialization {
                     },
                 });
                 Ok(())
-            })
-            .ok();
+            })?;
 
         Ok(Some(ShardTree {
             cap: cap_bytes,
