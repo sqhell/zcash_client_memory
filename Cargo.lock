@@ -2840,6 +2840,7 @@ dependencies = [
  "zcash_script",
  "zcash_transparent",
  "zip32",
+ "zip321",
 ]
 
 [[package]]

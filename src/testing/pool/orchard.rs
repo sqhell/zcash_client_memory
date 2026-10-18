@@ -191,3 +191,18 @@ fn propose_v5_payment_to_orchard_receiver_is_rejected() {
 fn proposal_records_and_serializes_proposed_version() {
     testing::pool::proposal_records_and_serializes_proposed_version()
 }
+
+#[test]
+fn spent_nullifiers_stay_hidden_after_pruning() {
+    use zcash_client_backend::data_api::WalletRead;
+    testing::pool::spent_nullifiers_stay_hidden_after_pruning::<OrchardPoolTester>(
+        |wallet, query| {
+            wallet
+                .get_orchard_nullifiers(query)
+                .unwrap()
+                .into_iter()
+                .map(|(_, nf)| nf)
+                .collect()
+        },
+    )
+}

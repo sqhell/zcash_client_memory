@@ -1,6 +1,14 @@
-use zcash_client_backend::data_api::testing::pool::ShieldedPoolTester;
+use zcash_client_backend::data_api::{
+    NullifierQuery,
+    testing::{AddressType, TestBuilder, TestFvk, pool::ShieldedPoolTester},
+};
+use zcash_primitives::block::BlockHash;
+use zcash_protocol::{local_consensus::LocalNetwork, value::Zatoshis};
 
-use crate::testing::{MemBlockCache, TestMemDbFactory};
+use crate::{
+    MemoryWalletDb, PRUNING_DEPTH,
+    testing::{MemBlockCache, TestMemDbFactory},
+};
 
 #[cfg(test)]
 mod sapling;
@@ -8,6 +16,10 @@ mod sapling;
 #[cfg(test)]
 #[cfg(feature = "orchard")]
 mod orchard;
+
+#[cfg(test)]
+#[cfg(feature = "orchard")]
+mod ironwood;
 
 pub(crate) fn send_single_step_proposed_transfer<T: ShieldedPoolTester>() {
     zcash_client_backend::data_api::testing::pool::send_single_step_proposed_transfer::<T>(
@@ -254,3 +266,73 @@ pub(crate) fn receive_two_notes_with_same_value<T: ShieldedPoolTester>() {
         MemBlockCache::new(),
     )
 }
+
+/// A note whose spend was detected by scanning must not be reported by the unspent-nullifier
+/// query, before or after the chain nullifier map is pruned below the spend.
+///
+/// The query used to infer "unspent" from the absence of a nullifier-map entry. That map only
+/// ever holds nullifiers the scanner could not link to a wallet note, so a spend detected in
+/// order was never in it and its note was reported as unspent from the start; and `put_blocks`
+/// now drops entries more than `PRUNING_DEPTH` blocks below the fully scanned height, so a spend
+/// linked out of order came back as unspent once it aged past the pruning depth. The query must
+/// rely on the wallet's spend record instead.
+///
+/// `nullifiers` performs the pool's nullifier query on the store.
+pub(crate) fn spent_nullifiers_stay_hidden_after_pruning<T: ShieldedPoolTester>(
+    nullifiers: impl Fn(&MemoryWalletDb<LocalNetwork>, NullifierQuery) -> Vec<Nf<T>>,
+) where
+    Nf<T>: PartialEq + std::fmt::Debug,
+{
+    let mut st = TestBuilder::new()
+        .with_data_store_factory(TestMemDbFactory::new())
+        .with_block_cache(MemBlockCache::new())
+        .with_account_from_sapling_activation(BlockHash([0; 32]))
+        .build();
+
+    let dfvk = T::test_account_fvk(&st);
+    let value = Zatoshis::const_from_u64(100_000);
+    let (h, _, nf) = st.generate_next_block(&dfvk, AddressType::DefaultExternal, value);
+    st.scan_cached_blocks(h, 1);
+    assert_eq!(nullifiers(st.wallet(), NullifierQuery::Unspent), vec![nf]);
+
+    // Spend the note in the next block, with change back to the wallet. Scanning links the
+    // spend to the note directly, so it never enters the chain nullifier map.
+    let to = T::sk_default_address(&T::sk(&[0xf5; 32]));
+    let (spend_height, _) =
+        st.generate_next_block_spending(&dfvk, (nf, value), to, Zatoshis::const_from_u64(60_000));
+    st.scan_cached_blocks(spend_height, 1);
+    assert!(
+        !nullifiers(st.wallet(), NullifierQuery::Unspent).contains(&nf),
+        "a mined spend hides the nullifier"
+    );
+
+    // Scan past the pruning depth, then one more batch: `put_blocks` prunes against the fully
+    // scanned height as of the start of the batch, so the spend's block only falls below the
+    // cutoff on the following call.
+    for _ in 0..=PRUNING_DEPTH {
+        st.generate_empty_block();
+    }
+    st.scan_cached_blocks(spend_height + 1, PRUNING_DEPTH as usize + 1);
+    let (h, _) = st.generate_empty_block();
+    st.scan_cached_blocks(h, 1);
+    let cutoff = spend_height + 1;
+    assert!(
+        st.wallet()
+            .nullifiers
+            .values()
+            .all(|(height, _)| *height > cutoff),
+        "nullifier-map entries at or below the spend's height have been pruned"
+    );
+
+    assert!(
+        !nullifiers(st.wallet(), NullifierQuery::Unspent).contains(&nf),
+        "the note must stay spent once the nullifier map no longer covers its height"
+    );
+    assert!(
+        nullifiers(st.wallet(), NullifierQuery::All).contains(&nf),
+        "the All query still reports the spent note's nullifier"
+    );
+}
+
+/// The nullifier type of a pool tester's viewing key.
+type Nf<T> = <<T as ShieldedPoolTester>::Fvk as TestFvk>::Nullifier;
