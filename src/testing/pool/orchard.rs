@@ -206,3 +206,18 @@ fn spent_nullifiers_stay_hidden_after_pruning() {
         },
     )
 }
+
+#[test]
+fn rolled_back_spend_returns_the_note_to_unspent() {
+    use zcash_client_backend::data_api::WalletRead;
+    testing::pool::rolled_back_spend_returns_the_note_to_unspent::<OrchardPoolTester>(
+        |wallet, query| {
+            wallet
+                .get_orchard_nullifiers(query)
+                .unwrap()
+                .into_iter()
+                .map(|(_, nf)| nf)
+                .collect()
+        },
+    );
+}

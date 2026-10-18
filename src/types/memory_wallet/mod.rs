@@ -485,7 +485,11 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
             .get(note_id)
             .and_then(|txid| self.tx_table.get(txid))
             .is_some_and(|tx| {
-                matches!(tx.status(), TransactionStatus::Mined(_)) || tx.expiry_height().is_none()
+                // As in `zcash_client_sqlite`, an unmined spend only counts once it can no longer
+                // expire: a raw transaction with expiry height 0. `None` means the expiry is
+                // unknown (the entry came from a scan), so the spend may still lapse.
+                matches!(tx.status(), TransactionStatus::Mined(_))
+                    || tx.expiry_height() == Some(BlockHeight::from(0))
             })
     }
 
@@ -506,11 +510,13 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
                     TransactionStatus::Mined(_height) => true,
                     TransactionStatus::TxidNotRecognized => unreachable!(),
                     TransactionStatus::NotInMainChain => {
-                        // transaction either never expires, or expires in the future.
-                        spending_tx
-                            .expiry_height()
-                            .iter()
-                            .all(|h| *h >= BlockHeight::from(target_height))
+                        // The spend counts while the transaction cannot have lapsed: it never
+                        // expires (expiry height 0) or expires at or after the target height.
+                        // An unknown expiry (`None`, an entry created by a scan that was then
+                        // rolled back) may have lapsed, so the note is treated as unspent.
+                        spending_tx.expiry_height().is_some_and(|h| {
+                            h == BlockHeight::from(0) || h >= BlockHeight::from(target_height)
+                        })
                     }
                 }
             }

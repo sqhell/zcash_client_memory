@@ -185,3 +185,18 @@ fn spent_nullifiers_stay_hidden_after_pruning() {
         },
     )
 }
+
+#[test]
+fn rolled_back_spend_returns_the_note_to_unspent() {
+    use zcash_client_backend::data_api::WalletRead;
+    testing::pool::rolled_back_spend_returns_the_note_to_unspent::<SaplingPoolTester>(
+        |wallet, query| {
+            wallet
+                .get_sapling_nullifiers(query)
+                .unwrap()
+                .into_iter()
+                .map(|(_, nf)| nf)
+                .collect()
+        },
+    );
+}

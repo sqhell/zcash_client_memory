@@ -334,5 +334,50 @@ pub(crate) fn spent_nullifiers_stay_hidden_after_pruning<T: ShieldedPoolTester>(
     );
 }
 
+/// A spend that a scan recorded and a reorg then rolled back has no known expiry height, so it
+/// may lapse. Both the unspent-nullifier query and spendability must treat the note as unspent
+/// again, as `zcash_client_sqlite` does (an unmined spend only counts when its expiry height is
+/// 0, meaning it can never expire).
+///
+/// `nullifiers` performs the pool's nullifier query on the store.
+pub(crate) fn rolled_back_spend_returns_the_note_to_unspent<T: ShieldedPoolTester>(
+    nullifiers: impl Fn(&MemoryWalletDb<LocalNetwork>, NullifierQuery) -> Vec<Nf<T>>,
+) where
+    Nf<T>: PartialEq + std::fmt::Debug,
+{
+    let mut st = TestBuilder::new()
+        .with_data_store_factory(TestMemDbFactory::new())
+        .with_block_cache(MemBlockCache::new())
+        .with_account_from_sapling_activation(BlockHash([0; 32]))
+        .build();
+
+    let dfvk = T::test_account_fvk(&st);
+    let value = Zatoshis::const_from_u64(100_000);
+    let (received_height, _, nf) =
+        st.generate_next_block(&dfvk, AddressType::DefaultExternal, value);
+    st.scan_cached_blocks(received_height, 1);
+
+    let to = T::sk_default_address(&T::sk(&[0xf5; 32]));
+    let (spend_height, _) =
+        st.generate_next_block_spending(&dfvk, (nf, value), to, Zatoshis::const_from_u64(60_000));
+    st.scan_cached_blocks(spend_height, 1);
+    assert!(
+        !nullifiers(st.wallet(), NullifierQuery::Unspent).contains(&nf),
+        "a mined spend hides the nullifier"
+    );
+
+    // Roll the spending block back. The spending transaction is now unmined with an unknown
+    // expiry height, so the spend may never be mined again.
+    st.truncate_to_height(received_height);
+    assert!(
+        nullifiers(st.wallet(), NullifierQuery::Unspent).contains(&nf),
+        "a rolled-back spend with unknown expiry must not hide the nullifier"
+    );
+    assert!(
+        nullifiers(st.wallet(), NullifierQuery::All).contains(&nf),
+        "the All query still reports the nullifier"
+    );
+}
+
 /// The nullifier type of a pool tester's viewing key.
 type Nf<T> = <<T as ShieldedPoolTester>::Fvk as TestFvk>::Nullifier;
