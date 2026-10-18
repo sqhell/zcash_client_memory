@@ -1435,8 +1435,11 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
             self.blocks.retain(|height, _| *height <= truncation_height);
 
             // Delete from the nullifier map any entries with a locator referencing a block
-            // height greater than the truncation height.
-            // Willem: We don't need to do this I think..
+            // height greater than the truncation height, as zcash_client_sqlite does. Keeping
+            // them is not harmless: after a reorg replaces a block, rescanning that height can
+            // meet a different txid at a locator that is still occupied, and `put_blocks` then
+            // fails with `ConflictingTxLocator`, leaving the wallet dirty.
+            self.prune_nullifier_map_above(truncation_height);
         }
         Ok(truncation_height)
     }

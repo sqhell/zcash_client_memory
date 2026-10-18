@@ -499,5 +499,59 @@ pub(crate) fn sync_state_accessors<T: ShieldedPoolTester>() {
     assert_eq!(st.wallet().wallet_birthday(), Some(birthday));
 }
 
+/// A rewind must forget the chain nullifiers of the blocks it disowns. Otherwise a block that
+/// a reorg replaced can leave a transaction locator occupied by the old txid, and rescanning
+/// that height fails with `ConflictingTxLocator`, which now leaves the wallet dirty.
+pub(crate) fn truncate_drops_nullifier_map_entries_above_the_height<T: ShieldedPoolTester>() {
+    let mut st = TestBuilder::new()
+        .with_data_store_factory(TestMemDbFactory::new())
+        .with_block_cache(MemBlockCache::new())
+        .with_account_from_sapling_activation(BlockHash([0; 32]))
+        .build();
+
+    let dfvk = T::test_account_fvk(&st);
+    let value = Zatoshis::const_from_u64(100_000);
+    let (h0, _, _) = st.generate_next_block(&dfvk, AddressType::DefaultExternal, value);
+    let (h1, _, _) = st.generate_next_block(&dfvk, AddressType::DefaultExternal, value);
+    let (h2, _, _) = st.generate_next_block(&dfvk, AddressType::DefaultExternal, value);
+    st.scan_cached_blocks(h0, 3);
+
+    let nf = |byte: u8| ::sapling::Nullifier([byte; 32]);
+    let entry = |byte: u8| {
+        (
+            zcash_protocol::consensus::TxIndex::from(byte as u16),
+            zcash_protocol::TxId::from_bytes([byte; 32]),
+            vec![nf(byte)],
+        )
+    };
+    st.wallet_mut()
+        .insert_sapling_nullifier_map(h0, &[entry(1)])
+        .unwrap();
+    st.wallet_mut()
+        .insert_sapling_nullifier_map(h1, &[entry(2)])
+        .unwrap();
+    st.wallet_mut()
+        .insert_sapling_nullifier_map(h2, &[entry(3)])
+        .unwrap();
+
+    st.truncate_to_height(h1);
+
+    let kept = |byte: u8| {
+        st.wallet()
+            .nullifiers
+            .get(&crate::Nullifier::Sapling(nf(byte)))
+            .is_some()
+    };
+    assert!(
+        kept(1) && kept(2),
+        "entries at or below the rewind height stay"
+    );
+    assert!(!kept(3), "entries above the rewind height are dropped");
+    assert!(
+        st.wallet().tx_locator.keys().all(|(h, _)| *h <= h1),
+        "locators above the rewind height are dropped"
+    );
+}
+
 /// The nullifier type of a pool tester's viewing key.
 type Nf<T> = <<T as ShieldedPoolTester>::Fvk as TestFvk>::Nullifier;

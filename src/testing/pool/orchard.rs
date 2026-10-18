@@ -231,3 +231,8 @@ fn failed_put_blocks_leaves_the_wallet_dirty() {
 fn sync_state_accessors() {
     testing::pool::sync_state_accessors::<OrchardPoolTester>()
 }
+
+#[test]
+fn truncate_drops_nullifier_map_entries_above_the_height() {
+    testing::pool::truncate_drops_nullifier_map_entries_above_the_height::<OrchardPoolTester>()
+}

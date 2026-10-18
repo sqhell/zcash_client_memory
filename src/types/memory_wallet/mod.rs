@@ -827,6 +827,17 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         self.nullifiers.0.retain(|_, (height, _)| *height >= cutoff);
     }
 
+    /// Removes every nullifier-map and transaction-locator entry mined above `max_height`,
+    /// for blocks that a rewind has disowned.
+    pub(crate) fn prune_nullifier_map_above(&mut self, max_height: BlockHeight) {
+        self.tx_locator
+            .0
+            .retain(|(height, _), _| *height <= max_height);
+        self.nullifiers
+            .0
+            .retain(|_, (height, _)| *height <= max_height);
+    }
+
     pub(crate) fn insert_sapling_nullifier_map(
         &mut self,
         block_height: BlockHeight,
