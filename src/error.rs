@@ -63,6 +63,10 @@ pub enum Error {
     ChainHeightUnknown,
     #[error("Conflicting Tx Locator map entry")]
     ConflictingTxLocator,
+    #[error(
+        "Wallet state is dirty: `{0}` failed part-way, so the in-memory state is inconsistent and must not be persisted or written to; rebuild it from the last good encoding"
+    )]
+    DirtyState(&'static str),
     #[error("Corrupted Data: {0}")]
     CorruptedData(String),
     #[error("Error deriving key: {0}")]

@@ -416,6 +416,12 @@ where
     }
 
     fn finally(&self) {
+        // A wallet left dirty by a failed write is documented as not encodable, so there is
+        // nothing to round-trip; the tests that provoke such a failure assert on it directly.
+        if self.is_dirty().is_some() {
+            return;
+        }
+
         // ensure the wallet state at the conclusion of each test can be round-tripped through serialization
         let bytes = self.encode_to_vec().unwrap();
         let recovered_wallet = MemoryWalletDb::decode_new(&bytes[..], self.params.clone(), 100)

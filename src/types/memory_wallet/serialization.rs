@@ -12,8 +12,11 @@ impl<P: Parameters> MemoryWalletDb<P> {
     /// Encode a memory wallet db as a protobuf byte buffer
     /// Always uses the latest version of the wire protocol
     ///
-    /// Fails if any part of the wallet cannot be serialized; it never writes a partial blob.
+    /// Fails if any part of the wallet cannot be serialized, or with [`Error::DirtyState`] if a
+    /// write operation failed part-way (see [`MemoryWalletDb::is_dirty`]); it never writes a
+    /// partial or inconsistent blob.
     pub fn encode<B: BufMut>(&self, buf: &mut B) -> Result<()> {
+        self.check_clean()?;
         let proto_wallet = proto::MemoryWallet::try_from(self)?;
         proto_wallet.encode(buf)?;
         Ok(())
@@ -21,7 +24,10 @@ impl<P: Parameters> MemoryWalletDb<P> {
 
     /// Encode a memory wallet db into a new byte vector sized up front from the encoded length,
     /// so a large wallet is written in one allocation instead of growing the buffer as it goes.
+    ///
+    /// Fails in the same cases as [`Self::encode`].
     pub fn encode_to_vec(&self) -> Result<Vec<u8>> {
+        self.check_clean()?;
         let proto_wallet = proto::MemoryWallet::try_from(self)?;
         Ok(proto_wallet.encode_to_vec())
     }

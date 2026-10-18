@@ -1,12 +1,12 @@
 use zcash_client_backend::data_api::{
-    NullifierQuery,
+    NullifierQuery, TransactionStatus, WalletWrite, chain,
     testing::{AddressType, TestBuilder, TestFvk, pool::ShieldedPoolTester},
 };
 use zcash_primitives::block::BlockHash;
-use zcash_protocol::{local_consensus::LocalNetwork, value::Zatoshis};
+use zcash_protocol::{TxId, local_consensus::LocalNetwork, value::Zatoshis};
 
 use crate::{
-    MemoryWalletDb, PRUNING_DEPTH,
+    Error, MemoryWalletDb, PRUNING_DEPTH,
     testing::{MemBlockCache, TestMemDbFactory},
 };
 
@@ -377,6 +377,60 @@ pub(crate) fn rolled_back_spend_returns_the_note_to_unspent<T: ShieldedPoolTeste
         nullifiers(st.wallet(), NullifierQuery::All).contains(&nf),
         "the All query still reports the nullifier"
     );
+}
+
+/// A `put_blocks` that fails part-way must leave the wallet dirty: it has already recorded some
+/// of the block's data, so persisting it would store a state no sequence of complete operations
+/// produces. The wallet must refuse further writes and refuse to be encoded until it is rebuilt
+/// from the last good blob.
+pub(crate) fn failed_put_blocks_leaves_the_wallet_dirty<T: ShieldedPoolTester>() {
+    let mut st = TestBuilder::new()
+        .with_data_store_factory(TestMemDbFactory::new())
+        .with_block_cache(MemBlockCache::new())
+        .with_account_from_sapling_activation(BlockHash([0; 32]))
+        .build();
+
+    let dfvk = T::test_account_fvk(&st);
+    let (h, _, _) = st.generate_next_block(
+        &dfvk,
+        AddressType::DefaultExternal,
+        Zatoshis::const_from_u64(100_000),
+    );
+
+    // The block's only transaction sits at index 0. A locator entry for that slot under another
+    // txid makes `put_blocks` fail with `ConflictingTxLocator` after it has stored the note.
+    st.wallet_mut()
+        .tx_locator
+        ._insert(h, 0, TxId::from_bytes([0xee; 32]));
+    assert_eq!(st.wallet().is_dirty(), None);
+
+    assert!(matches!(
+        st.try_scan_cached_blocks(h, 1),
+        Err(chain::error::Error::Wallet(Error::ConflictingTxLocator))
+    ));
+    assert_eq!(st.wallet().is_dirty(), Some("put_blocks"));
+
+    let mut buf = vec![];
+    assert!(matches!(
+        st.wallet().encode(&mut buf),
+        Err(Error::DirtyState("put_blocks"))
+    ));
+    assert!(buf.is_empty(), "nothing is written for a dirty wallet");
+    assert!(matches!(
+        st.wallet().encode_to_vec(),
+        Err(Error::DirtyState("put_blocks"))
+    ));
+
+    // Later writes are refused as well, and name the operation that failed.
+    assert!(matches!(
+        st.wallet_mut()
+            .set_transaction_status(TxId::from_bytes([0; 32]), TransactionStatus::NotInMainChain),
+        Err(Error::DirtyState("put_blocks"))
+    ));
+    assert!(matches!(
+        st.wallet_mut().truncate_to_height(h),
+        Err(Error::DirtyState("put_blocks"))
+    ));
 }
 
 /// The nullifier type of a pool tester's viewing key.

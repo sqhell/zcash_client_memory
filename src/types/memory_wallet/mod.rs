@@ -112,6 +112,12 @@ pub struct MemoryWalletDb<P: consensus::Parameters> {
     pub(crate) transaction_data_request_queue: TransactionDataRequestQueue,
     /// Queue of block ranges that should be scanned along with their priority
     pub(crate) scan_queue: ScanQueue,
+
+    /// The name of the write operation that failed part-way, if any. Set by [`Self::mutate`]
+    /// for the duration of an operation and cleared only when it succeeds, so an error leaves
+    /// it set. Never serialized: a dirty wallet refuses to be encoded at all, and a decoded
+    /// wallet is always clean. Not part of `PartialEq`.
+    dirty: Option<&'static str>,
 }
 
 impl<P: consensus::Parameters + PartialEq> PartialEq for MemoryWalletDb<P> {
@@ -180,6 +186,7 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
             transparent_received_output_spends: TransparentReceivedOutputSpends::new(),
             transparent_spend_map: TransparentSpendCache::new(),
             transaction_data_request_queue: TransactionDataRequestQueue::new(),
+            dirty: None,
         }
     }
 
@@ -187,7 +194,51 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         &self.params
     }
 
+    /// The write operation that failed part-way and left the wallet in an inconsistent state,
+    /// if any. A dirty wallet refuses further writes and refuses to be encoded; the caller
+    /// should discard it and rebuild from the last successfully persisted encoding.
+    pub fn is_dirty(&self) -> Option<&'static str> {
+        self.dirty
+    }
+
+    /// Returns [`Error::DirtyState`] if a write operation failed part-way.
+    pub(crate) fn check_clean(&self) -> Result<(), Error> {
+        match self.dirty {
+            Some(op) => Err(Error::DirtyState(op)),
+            None => Ok(()),
+        }
+    }
+
+    /// Runs `f`, a write operation that touches persisted state, as a unit: the wallet is marked
+    /// dirty with the operation's name before `f` starts and marked clean only if `f` returns
+    /// `Ok`. There is no rollback, so if `f` fails part-way the wallet stays dirty, every later
+    /// mutation and every attempt to encode it fail with [`Error::DirtyState`], and the caller
+    /// must rebuild the wallet from its last good encoding. Refuses to start on a dirty wallet.
+    pub(crate) fn mutate<R>(
+        &mut self,
+        op: &'static str,
+        f: impl FnOnce(&mut Self) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        self.check_clean()?;
+        self.dirty = Some(op);
+        let result = f(self)?;
+        self.dirty = None;
+        Ok(result)
+    }
+
     pub(crate) fn add_account(
+        &mut self,
+        account_name: &str,
+        kind: AccountSource,
+        viewing_key: UnifiedFullViewingKey,
+        birthday: AccountBirthday,
+    ) -> Result<(AccountId, Account), Error> {
+        self.mutate("add_account", |db| {
+            db.add_account_inner(account_name, kind, viewing_key, birthday)
+        })
+    }
+
+    fn add_account_inner(
         &mut self,
         account_name: &str,
         kind: AccountSource,
@@ -1524,6 +1575,63 @@ mod tests {
 
     fn sapling_nf(byte: u8) -> Nullifier {
         Nullifier::Sapling(sapling::Nullifier([byte; 32]))
+    }
+
+    #[test]
+    fn mutate_marks_the_wallet_dirty_only_while_an_operation_runs() {
+        let mut db = MemoryWalletDb::new(Network::TestNetwork, 100);
+        assert_eq!(db.is_dirty(), None);
+
+        let seen = db
+            .mutate("op", |db| {
+                assert_eq!(db.is_dirty(), Some("op"));
+                Ok(7)
+            })
+            .unwrap();
+        assert_eq!(seen, 7);
+        assert_eq!(db.is_dirty(), None);
+    }
+
+    #[test]
+    fn a_failed_mutation_leaves_the_wallet_dirty_and_refuses_further_writes() {
+        let mut db = MemoryWalletDb::new(Network::TestNetwork, 100);
+        assert!(matches!(
+            db.mutate("first", |_| Err::<(), _>(Error::Other("boom".into()))),
+            Err(Error::Other(_))
+        ));
+        assert_eq!(db.is_dirty(), Some("first"));
+
+        // The next operation is refused before it runs, naming the one that failed.
+        let mut ran = false;
+        assert!(matches!(
+            db.mutate("second", |_| {
+                ran = true;
+                Ok(())
+            }),
+            Err(Error::DirtyState("first"))
+        ));
+        assert!(!ran);
+        assert_eq!(db.is_dirty(), Some("first"));
+    }
+
+    #[test]
+    fn a_dirty_wallet_refuses_to_encode() {
+        let mut db = MemoryWalletDb::new(Network::TestNetwork, 100);
+        let mut buf = vec![];
+        db.encode(&mut buf).unwrap();
+        assert!(!buf.is_empty());
+
+        let _ = db.mutate("put_blocks", |_| Err::<(), _>(Error::NonSequentialBlocks));
+        let mut buf = vec![];
+        assert!(matches!(
+            db.encode(&mut buf),
+            Err(Error::DirtyState("put_blocks"))
+        ));
+        assert!(buf.is_empty());
+        assert!(matches!(
+            db.encode_to_vec(),
+            Err(Error::DirtyState("put_blocks"))
+        ));
     }
 
     fn txid(byte: u8) -> TxId {

@@ -200,3 +200,8 @@ fn rolled_back_spend_returns_the_note_to_unspent() {
         },
     );
 }
+
+#[test]
+fn failed_put_blocks_leaves_the_wallet_dirty() {
+    testing::pool::failed_put_blocks_leaves_the_wallet_dirty::<SaplingPoolTester>()
+}
