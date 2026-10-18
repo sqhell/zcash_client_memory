@@ -22,11 +22,15 @@ enum PoolType {
   Transparent = 0;
   ShieldedSapling = 1;
   ShieldedOrchard = 2;
+  // The Ironwood pool (NU6.3). Its notes and nullifiers are Orchard-shaped but it is a
+  // distinct pool with its own note commitment tree.
+  ShieldedIronwood = 3;
 }
 
 enum ShieldedProtocol {
   sapling = 0;
   orchard = 1;
+  ironwood = 2;
 }
 
 message Memo {

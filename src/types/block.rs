@@ -22,6 +22,10 @@ pub(crate) struct MemoryWalletBlock {
     pub(crate) orchard_commitment_tree_size: Option<u32>,
     #[cfg(feature = "orchard")]
     pub(crate) orchard_action_count: Option<u32>,
+    #[cfg(feature = "orchard")]
+    pub(crate) ironwood_commitment_tree_size: Option<u32>,
+    #[cfg(feature = "orchard")]
+    pub(crate) ironwood_action_count: Option<u32>,
 }
 
 impl Eq for MemoryWalletBlock {}
@@ -73,6 +77,14 @@ mod serialization {
                 orchard_action_count: block.orchard_action_count,
                 #[cfg(not(feature = "orchard"))]
                 orchard_action_count: None,
+                #[cfg(feature = "orchard")]
+                ironwood_commitment_tree_size: block.ironwood_commitment_tree_size,
+                #[cfg(not(feature = "orchard"))]
+                ironwood_commitment_tree_size: None,
+                #[cfg(feature = "orchard")]
+                ironwood_action_count: block.ironwood_action_count,
+                #[cfg(not(feature = "orchard"))]
+                ironwood_action_count: None,
             }
         }
     }
@@ -97,16 +109,9 @@ mod serialization {
                         Ok((
                             NoteId::new(
                                 read_optional!(note_id.clone(), tx_id)?.try_into()?,
-                                match note_id.pool() {
-                                    proto::PoolType::ShieldedSapling => {
-                                        zcash_protocol::ShieldedPool::Sapling
-                                    }
-                                    #[cfg(feature = "orchard")]
-                                    proto::PoolType::ShieldedOrchard => {
-                                        zcash_protocol::ShieldedPool::Orchard
-                                    }
-                                    _ => unreachable!(),
-                                },
+                                crate::types::notes::shielded_protocol_from_proto(
+                                    note_id.pool(),
+                                )?,
                                 note_id.output_index as u16,
                             ),
                             MemoBytes::from_bytes(&memo.memo)?,
@@ -119,6 +124,10 @@ mod serialization {
                 orchard_commitment_tree_size: block.orchard_commitment_tree_size,
                 #[cfg(feature = "orchard")]
                 orchard_action_count: block.orchard_action_count,
+                #[cfg(feature = "orchard")]
+                ironwood_commitment_tree_size: block.ironwood_commitment_tree_size,
+                #[cfg(feature = "orchard")]
+                ironwood_action_count: block.ironwood_action_count,
             })
         }
     }
@@ -143,6 +152,10 @@ mod serialization {
                 orchard_commitment_tree_size: Some(5),
                 #[cfg(feature = "orchard")]
                 orchard_action_count: Some(6),
+                #[cfg(feature = "orchard")]
+                ironwood_commitment_tree_size: Some(7),
+                #[cfg(feature = "orchard")]
+                ironwood_action_count: Some(8),
             };
 
             let proto: proto::WalletBlock = block.clone().into();

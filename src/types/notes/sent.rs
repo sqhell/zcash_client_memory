@@ -9,9 +9,6 @@ use zcash_protocol::{PoolType, ShieldedPool::Sapling, TxId, memo::Memo, value::Z
 
 use crate::AccountId;
 
-#[cfg(feature = "orchard")]
-use zcash_protocol::ShieldedPool::Orchard;
-
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug, Clone)]
 pub enum SentNoteId {
     Shielded(NoteId),
@@ -236,11 +233,7 @@ mod serialization {
                     pool: match note_id.protocol() {
                         ShieldedPool::Sapling => proto::PoolType::ShieldedSapling as i32,
                         ShieldedPool::Orchard => proto::PoolType::ShieldedOrchard as i32,
-                        // The in-memory backend does not track Ironwood (NU6.3) notes, so no
-                        // Ironwood sent-note id is ever produced.
-                        ShieldedPool::Ironwood => {
-                            unreachable!("the in-memory backend does not track Ironwood notes")
-                        }
+                        ShieldedPool::Ironwood => proto::PoolType::ShieldedIronwood as i32,
                     },
                 },
                 SentNoteId::Transparent { txid, output_index } => proto::NoteId {
@@ -257,23 +250,15 @@ mod serialization {
 
         fn try_from(note_id: proto::NoteId) -> Result<Self, Self::Error> {
             Ok(match note_id.pool() {
-                proto::PoolType::ShieldedSapling => SentNoteId::Shielded(NoteId::new(
-                    read_optional!(note_id, tx_id)?.try_into()?,
-                    Sapling,
-                    note_id.output_index.try_into()?,
-                )),
-                #[cfg(feature = "orchard")]
-                proto::PoolType::ShieldedOrchard => SentNoteId::Shielded(NoteId::new(
-                    read_optional!(note_id, tx_id)?.try_into()?,
-                    Orchard,
-                    note_id.output_index.try_into()?,
-                )),
-                #[cfg(not(feature = "orchard"))]
-                proto::PoolType::ShieldedOrchard => return Err(Error::OrchardNotEnabled),
                 proto::PoolType::Transparent => SentNoteId::Transparent {
                     txid: read_optional!(note_id, tx_id)?.try_into()?,
                     output_index: note_id.output_index,
                 },
+                pool => SentNoteId::Shielded(NoteId::new(
+                    read_optional!(note_id, tx_id)?.try_into()?,
+                    crate::types::notes::shielded_protocol_from_proto(pool)?,
+                    note_id.output_index.try_into()?,
+                )),
             })
         }
     }
@@ -308,15 +293,12 @@ mod serialization {
                     pool_type: Some(match output_pool {
                         PoolType::Transparent => proto::PoolType::Transparent,
                         PoolType::Shielded(Sapling) => proto::PoolType::ShieldedSapling,
-                        #[cfg(feature = "orchard")]
-                        PoolType::Shielded(Orchard) => proto::PoolType::ShieldedOrchard,
-                        // The in-memory backend does not send to the Ironwood (NU6.3) pool, so no
-                        // external Ironwood recipient is ever serialized.
-                        PoolType::Shielded(zcash_protocol::ShieldedPool::Ironwood) => {
-                            unreachable!("the in-memory backend does not produce Ironwood outputs")
+                        PoolType::Shielded(ShieldedPool::Orchard) => {
+                            proto::PoolType::ShieldedOrchard
                         }
-                        #[cfg(not(feature = "orchard"))]
-                        _ => panic!("Orchard not enabled"),
+                        PoolType::Shielded(ShieldedPool::Ironwood) => {
+                            proto::PoolType::ShieldedIronwood
+                        }
                     } as i32),
 
                     account_id: None,
@@ -381,13 +363,9 @@ mod serialization {
                         recipient_address: address,
                         output_pool: match recipient.pool_type() {
                             proto::PoolType::Transparent => PoolType::Transparent,
-                            proto::PoolType::ShieldedSapling => PoolType::Shielded(Sapling),
-                            #[cfg(feature = "orchard")]
-                            proto::PoolType::ShieldedOrchard => PoolType::Shielded(Orchard),
-                            #[cfg(not(feature = "orchard"))]
-                            proto::PoolType::ShieldedOrchard => {
-                                return Err(Error::OrchardNotEnabled);
-                            }
+                            pool => PoolType::Shielded(
+                                crate::types::notes::shielded_protocol_from_proto(pool)?,
+                            ),
                         },
                     }
                 }

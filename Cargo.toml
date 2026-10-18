@@ -5,7 +5,7 @@ version = "0.0.0"
 repository = "https://github.com/zcash/zcash_client_memory"
 license = "MIT OR Apache-2.0"
 edition = "2024"
-rust-version = "1.85.1"
+rust-version = "1.88"
 build = "build.rs"
 
 # Exclude proto files so crates.io consumers don't need protoc.
@@ -75,7 +75,8 @@ time = {version = "0.3.22", default-features = false}
 [dev-dependencies]
 ciborium = "0.2.2"
 serde_json = "1"
-zcash_client_backend = {version = "0.24.0-rc.1", features = ["test-dependencies"]}
+# `pczt` gates the backend's NU6.3 test cases (Ironwood outputs, version 6 PCZTs).
+zcash_client_backend = {version = "0.24.0-rc.1", features = ["test-dependencies", "pczt"]}
 postcard = {version = "1", default-features = false, features = ["alloc"]}
 
 

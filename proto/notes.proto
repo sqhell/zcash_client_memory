@@ -10,6 +10,9 @@ message Note {
   uint64 value = 3;
   optional bytes rho = 4;
   RSeed rseed = 5;
+  // Orchard-family note plaintext version lead byte (2 for Orchard, 3 for Ironwood). Notes
+  // saved before this field existed are Orchard-pool notes and decode as version 2.
+  optional uint32 note_version = 6;
 }
 
 message RSeed {

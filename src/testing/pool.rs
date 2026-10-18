@@ -112,6 +112,31 @@ pub(crate) fn zip317_spend<T: ShieldedPoolTester>() {
     )
 }
 
+/// NU6.3: a payment to an Orchard receiver becomes a version 6 PCZT with an Ironwood bundle.
+#[cfg(feature = "orchard")]
+pub(crate) fn create_pczt_supports_ironwood_output() {
+    zcash_client_backend::data_api::testing::pool::create_pczt_supports_ironwood_output(
+        TestMemDbFactory::new(),
+        MemBlockCache::new(),
+    )
+}
+
+#[cfg(feature = "orchard")]
+pub(crate) fn propose_v5_payment_to_orchard_receiver_is_rejected() {
+    zcash_client_backend::data_api::testing::pool::propose_v5_payment_to_orchard_receiver_is_rejected(
+        TestMemDbFactory::new(),
+        MemBlockCache::new(),
+    )
+}
+
+#[cfg(feature = "orchard")]
+pub(crate) fn proposal_records_and_serializes_proposed_version() {
+    zcash_client_backend::data_api::testing::pool::proposal_records_and_serializes_proposed_version(
+        TestMemDbFactory::new(),
+        MemBlockCache::new(),
+    )
+}
+
 #[cfg(feature = "transparent-inputs")]
 pub(crate) fn shield_transparent<T: ShieldedPoolTester>() {
     zcash_client_backend::data_api::testing::pool::shield_transparent::<T, _>(

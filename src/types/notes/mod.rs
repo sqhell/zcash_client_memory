@@ -6,6 +6,18 @@ pub use received::{ReceivedNote, ReceivedNoteTable};
 #[cfg(test)]
 pub(crate) use sent::SentNoteId;
 pub use sent::{SentNote, SentNoteTable};
+pub(crate) use serialization::shielded_protocol_from_proto;
+
+/// The shielded protocol an Orchard-family note belongs to, by its value pool.
+#[cfg(feature = "orchard")]
+pub(crate) fn shielded_protocol_for_value_pool(
+    pool: orchard::ValuePool,
+) -> zcash_protocol::ShieldedPool {
+    match pool {
+        orchard::ValuePool::Orchard => zcash_protocol::ShieldedPool::Orchard,
+        orchard::ValuePool::Ironwood => zcash_protocol::ShieldedPool::Ironwood,
+    }
+}
 
 mod serialization {
     use crate::error::Error;
@@ -26,15 +38,15 @@ mod serialization {
                     zcash_protocol::ShieldedPool::Orchard => {
                         proto::PoolType::ShieldedOrchard.into()
                     }
+                    #[cfg(feature = "orchard")]
+                    zcash_protocol::ShieldedPool::Ironwood => {
+                        proto::PoolType::ShieldedIronwood.into()
+                    }
                     #[cfg(not(feature = "orchard"))]
-                    zcash_protocol::ShieldedPool::Orchard => panic!(
+                    zcash_protocol::ShieldedPool::Orchard
+                    | zcash_protocol::ShieldedPool::Ironwood => panic!(
                         "Attempting to deserialize orchard supporting wallet using library built without orchard feature"
                     ),
-                    // The in-memory backend does not scan or store Ironwood (NU6.3) notes, so no
-                    // Ironwood NoteId is ever produced to be serialized here.
-                    zcash_protocol::ShieldedPool::Ironwood => {
-                        unreachable!("the in-memory backend does not track Ironwood notes")
-                    }
                 },
                 output_index: u32::from(note_id.output_index()),
             }
@@ -46,14 +58,30 @@ mod serialization {
         fn try_from(note_id: proto::NoteId) -> Result<Self, Self::Error> {
             Ok(Self::new(
                 read_optional!(note_id.clone(), tx_id)?.try_into()?,
-                match note_id.pool() {
-                    proto::PoolType::ShieldedSapling => zcash_protocol::ShieldedPool::Sapling,
-                    #[cfg(feature = "orchard")]
-                    proto::PoolType::ShieldedOrchard => zcash_protocol::ShieldedPool::Orchard,
-                    _ => panic!("invalid pool"),
-                },
+                shielded_protocol_from_proto(note_id.pool())?,
                 note_id.output_index.try_into()?,
             ))
+        }
+    }
+
+    /// Maps a serialized pool to a shielded protocol, rejecting transparent and pools this build
+    /// does not support.
+    pub(crate) fn shielded_protocol_from_proto(
+        pool: proto::PoolType,
+    ) -> Result<zcash_protocol::ShieldedPool, Error> {
+        match pool {
+            proto::PoolType::ShieldedSapling => Ok(zcash_protocol::ShieldedPool::Sapling),
+            #[cfg(feature = "orchard")]
+            proto::PoolType::ShieldedOrchard => Ok(zcash_protocol::ShieldedPool::Orchard),
+            #[cfg(feature = "orchard")]
+            proto::PoolType::ShieldedIronwood => Ok(zcash_protocol::ShieldedPool::Ironwood),
+            #[cfg(not(feature = "orchard"))]
+            proto::PoolType::ShieldedOrchard | proto::PoolType::ShieldedIronwood => {
+                Err(Error::OrchardNotEnabled)
+            }
+            proto::PoolType::Transparent => Err(Error::CorruptedData(
+                "a transparent pool cannot identify a shielded note".into(),
+            )),
         }
     }
 
@@ -75,10 +103,15 @@ mod serialization {
                         }),
                     },
                     rho: None,
+                    note_version: None,
                 },
                 #[cfg(feature = "orchard")]
-                Note::Orchard { note, .. } => Self {
-                    protocol: proto::ShieldedProtocol::Orchard.into(),
+                Note::Orchard { note, pool } => Self {
+                    protocol: match pool {
+                        orchard::ValuePool::Orchard => proto::ShieldedProtocol::Orchard,
+                        orchard::ValuePool::Ironwood => proto::ShieldedProtocol::Ironwood,
+                    }
+                    .into(),
                     recipient: note.recipient().to_raw_address_bytes().to_vec(),
                     value: note.value().inner(),
                     rseed: Some(proto::RSeed {
@@ -86,6 +119,10 @@ mod serialization {
                         payload: note.rseed().as_bytes().to_vec(),
                     }),
                     rho: Some(note.rho().to_bytes().to_vec()),
+                    note_version: Some(match note.version() {
+                        orchard::note::NoteVersion::V2 => 2,
+                        orchard::note::NoteVersion::V3 => 3,
+                    }),
                 },
             }
         }
@@ -115,7 +152,11 @@ mod serialization {
                     Self::Sapling(sapling::Note::from_parts(recipient, value, rseed))
                 }
                 #[cfg(feature = "orchard")]
-                proto::ShieldedProtocol::Orchard => {
+                protocol @ (proto::ShieldedProtocol::Orchard | proto::ShieldedProtocol::Ironwood) => {
+                    let pool = match protocol {
+                        proto::ShieldedProtocol::Ironwood => orchard::ValuePool::Ironwood,
+                        _ => orchard::ValuePool::Orchard,
+                    };
                     let recipient = orchard::Address::from_raw_address_bytes(
                         &note.recipient.try_into().unwrap(),
                     )
@@ -130,18 +171,19 @@ mod serialization {
                     )
                     .unwrap();
                     // orchard 0.15 (NU6.3) adds a note-plaintext version: V2 = Orchard,
-                    // V3 = Ironwood. Notes persisted under the old proto (no version field)
-                    // are Orchard-pool notes, so reconstruct them as V2.
+                    // V3 = Ironwood. Notes persisted before the version field existed are
+                    // Orchard-pool notes, so they reconstruct as V2; Ironwood notes without the
+                    // field cannot exist, but default to V3 for symmetry.
+                    let version = match (note.note_version, pool) {
+                        (Some(2), _) => orchard::note::NoteVersion::V2,
+                        (Some(3), _) => orchard::note::NoteVersion::V3,
+                        (_, orchard::ValuePool::Orchard) => orchard::note::NoteVersion::V2,
+                        (_, orchard::ValuePool::Ironwood) => orchard::note::NoteVersion::V3,
+                    };
                     Self::Orchard {
-                        note: orchard::Note::from_parts(
-                            recipient,
-                            value,
-                            rho,
-                            rseed,
-                            orchard::note::NoteVersion::V2,
-                        )
-                        .unwrap(),
-                        pool: orchard::ValuePool::Orchard,
+                        note: orchard::Note::from_parts(recipient, value, rho, rseed, version)
+                            .unwrap(),
+                        pool,
                     }
                 }
                 #[cfg(not(feature = "orchard"))]

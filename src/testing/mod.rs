@@ -398,10 +398,15 @@ where
                         Ok(())
                     })?;
             }
-            // The in-memory backend maintains no Ironwood (NU6.3) note commitment tree, so it has
-            // no Ironwood checkpoint history to report.
             #[cfg(feature = "orchard")]
-            ShieldedPool::Ironwood => {}
+            ShieldedProtocol::Ironwood => {
+                self.ironwood_tree
+                    .store()
+                    .for_each_checkpoint(usize::MAX, |id, cp| {
+                        checkpoints.push((*id, cp.position()));
+                        Ok(())
+                    })?;
+            }
             #[cfg(not(feature = "orchard"))]
             _ => {}
         }

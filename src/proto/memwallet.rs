@@ -48,6 +48,9 @@ pub enum PoolType {
     Transparent = 0,
     ShieldedSapling = 1,
     ShieldedOrchard = 2,
+    /// The Ironwood pool (NU6.3). Its notes and nullifiers are Orchard-shaped but it is a
+    /// distinct pool with its own note commitment tree.
+    ShieldedIronwood = 3,
 }
 impl PoolType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -59,6 +62,7 @@ impl PoolType {
             Self::Transparent => "Transparent",
             Self::ShieldedSapling => "ShieldedSapling",
             Self::ShieldedOrchard => "ShieldedOrchard",
+            Self::ShieldedIronwood => "ShieldedIronwood",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -67,6 +71,7 @@ impl PoolType {
             "Transparent" => Some(Self::Transparent),
             "ShieldedSapling" => Some(Self::ShieldedSapling),
             "ShieldedOrchard" => Some(Self::ShieldedOrchard),
+            "ShieldedIronwood" => Some(Self::ShieldedIronwood),
             _ => None,
         }
     }
@@ -76,6 +81,7 @@ impl PoolType {
 pub enum ShieldedProtocol {
     Sapling = 0,
     Orchard = 1,
+    Ironwood = 2,
 }
 impl ShieldedProtocol {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -86,6 +92,7 @@ impl ShieldedProtocol {
         match self {
             Self::Sapling => "sapling",
             Self::Orchard => "orchard",
+            Self::Ironwood => "ironwood",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -93,6 +100,7 @@ impl ShieldedProtocol {
         match value {
             "sapling" => Some(Self::Sapling),
             "orchard" => Some(Self::Orchard),
+            "ironwood" => Some(Self::Ironwood),
             _ => None,
         }
     }
@@ -138,6 +146,10 @@ pub struct Note {
     pub rho: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(message, optional, tag = "5")]
     pub rseed: ::core::option::Option<RSeed>,
+    /// Orchard-family note plaintext version lead byte (2 for Orchard, 3 for Ironwood). Notes
+    /// saved before this field existed are Orchard-pool notes and decode as version 2.
+    #[prost(uint32, optional, tag = "6")]
+    pub note_version: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RSeed {
@@ -452,6 +464,13 @@ pub struct MemoryWallet {
     /// Queue of transaction data requests the wallet should make to the lightwalletd provided to obtain more complete information
     #[prost(message, repeated, tag = "18")]
     pub transaction_data_requests: ::prost::alloc::vec::Vec<TransactionDataRequest>,
+    /// Ironwood shielded pool shard tree (NU6.3). Absent in wallets saved before Ironwood support,
+    /// which decode to an empty tree.
+    #[prost(message, optional, tag = "19")]
+    pub ironwood_tree: ::core::option::Option<ShardTree>,
+    /// the block heights corresponding to the last note commitment for each shard in the ironwood tree
+    #[prost(message, repeated, tag = "20")]
+    pub ironwood_tree_shard_end_heights: ::prost::alloc::vec::Vec<TreeEndHeightsRecord>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Accounts {
@@ -551,6 +570,10 @@ pub struct ChainState {
     pub final_sapling_tree: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "4")]
     pub final_orchard_tree: ::prost::alloc::vec::Vec<u8>,
+    /// the Ironwood (NU6.3) note commitment tree frontier; empty for chain states saved before
+    /// Ironwood support, which decode to the empty frontier
+    #[prost(bytes = "vec", tag = "5")]
+    pub final_ironwood_tree: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WalletBlock {
@@ -581,6 +604,12 @@ pub struct WalletBlock {
     /// the number of Orchard actions in this block
     #[prost(uint32, optional, tag = "9")]
     pub orchard_action_count: ::core::option::Option<u32>,
+    /// the size of the Ironwood note commitment tree as of the end of this block
+    #[prost(uint32, optional, tag = "10")]
+    pub ironwood_commitment_tree_size: ::core::option::Option<u32>,
+    /// the number of Ironwood actions in this block
+    #[prost(uint32, optional, tag = "11")]
+    pub ironwood_action_count: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TransactionEntry {

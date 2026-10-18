@@ -36,14 +36,15 @@ use zcash_protocol::{
 use zip32::{DiversifierIndex, fingerprint::SeedFingerprint};
 
 use crate::{
-    MemoryWalletBlock, MemoryWalletDb, Nullifier, PRUNING_DEPTH, ReceivedNote, VERIFY_LOOKAHEAD,
-    error::Error,
+    AccountId, MemoryWalletBlock, MemoryWalletDb, Nullifier, PRUNING_DEPTH, ReceivedNote,
+    VERIFY_LOOKAHEAD, error::Error,
 };
 
 #[cfg(feature = "orchard")]
 use {
-    shardtree::error::ShardTreeError, std::collections::BTreeMap,
-    zcash_client_backend::data_api::ORCHARD_SHARD_HEIGHT, zcash_protocol::ShieldedPool::Orchard,
+    crate::types::notes::shielded_protocol_for_value_pool, shardtree::error::ShardTreeError,
+    std::collections::BTreeMap, zcash_client_backend::data_api::ORCHARD_SHARD_HEIGHT,
+    zcash_client_backend::wallet::WalletOrchardOutput,
 };
 
 #[cfg(feature = "transparent-inputs")]
@@ -302,6 +303,8 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
             sapling_start_position: Position,
             #[cfg(feature = "orchard")]
             orchard_start_position: Position,
+            #[cfg(feature = "orchard")]
+            ironwood_start_position: Position,
         }
         let start_positions = blocks.first().map(|block| BlockPositions {
             height: block.height(),
@@ -314,11 +317,18 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
                 u64::from(block.orchard().final_tree_size())
                     - u64::try_from(block.orchard().commitments().len()).unwrap(),
             ),
+            #[cfg(feature = "orchard")]
+            ironwood_start_position: Position::from(
+                u64::from(block.ironwood().final_tree_size())
+                    - u64::try_from(block.ironwood().commitments().len()).unwrap(),
+            ),
         });
 
         let mut sapling_commitments = vec![];
         #[cfg(feature = "orchard")]
         let mut orchard_commitments = vec![];
+        #[cfg(feature = "orchard")]
+        let mut ironwood_commitments = vec![];
         let mut note_positions = vec![];
         for block in blocks.into_iter() {
             let mut transactions = HashMap::new();
@@ -349,6 +359,12 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
                     self.mark_orchard_note_spent(*spend.nf(), txid)?;
                 }
 
+                // Likewise for the Ironwood pool, which reveals Orchard-shaped nullifiers of its own.
+                #[cfg(feature = "orchard")]
+                for spend in transaction.ironwood_spends() {
+                    self.mark_ironwood_note_spent(*spend.nf(), txid)?;
+                }
+
                 for output in transaction.sapling_outputs() {
                     // Insert the memo into the `memos` map.
                     let note_id = NoteId::new(
@@ -371,27 +387,43 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
                     self.insert_received_sapling_note(note_id, output, spent_in);
                 }
 
+                // Orchard and Ironwood outputs are stored the same way; the output's value pool
+                // decides the note identifier's protocol and the nullifier's pool tag.
                 #[cfg(feature = "orchard")]
-                for output in transaction.orchard_outputs().iter() {
-                    // Insert the memo into the `memos` map.
+                let mut put_orchard_family_output = |this: &mut Self,
+                                                     output: &WalletOrchardOutput<AccountId>|
+                 -> Result<(), Error> {
+                    let pool = output.note().1;
                     let note_id = NoteId::new(
                         txid,
-                        Orchard,
+                        shielded_protocol_for_value_pool(pool),
                         u16::try_from(output.index())
                             .expect("output indices are representable as u16"),
                     );
-                    if let Ok(Some(memo)) = self.get_memo(note_id) {
+                    // Insert the memo into the `memos` map.
+                    if let Ok(Some(memo)) = this.get_memo(note_id) {
                         memos.insert(note_id, memo.encode());
                     }
                     // Check whether this note was spent in a later block range that
                     // we previously scanned.
                     let spent_in = output
                         .nf()
-                        .and_then(|nf| self.nullifiers.get(&Nullifier::Orchard(*nf)))
-                        .and_then(|(height, tx_idx)| self.tx_locator.get(*height, *tx_idx))
+                        .and_then(|nf| this.nullifiers.get(&Nullifier::orchard_family(pool, *nf)))
+                        .and_then(|(height, tx_idx)| this.tx_locator.get(*height, *tx_idx))
                         .copied();
 
-                    self.insert_received_orchard_note(note_id, output, spent_in)
+                    this.insert_received_orchard_note(note_id, output, spent_in);
+                    Ok(())
+                };
+
+                #[cfg(feature = "orchard")]
+                for output in transaction.orchard_outputs().iter() {
+                    put_orchard_family_output(self, output)?;
+                }
+
+                #[cfg(feature = "orchard")]
+                for output in transaction.ironwood_outputs().iter() {
+                    put_orchard_family_output(self, output)?;
                 }
 
                 transactions.insert(txid, transaction.clone());
@@ -401,17 +433,27 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
             self.insert_sapling_nullifier_map(block.height(), block.sapling().nullifier_map())?;
             #[cfg(feature = "orchard")]
             self.insert_orchard_nullifier_map(block.height(), block.orchard().nullifier_map())?;
+            #[cfg(feature = "orchard")]
+            self.insert_ironwood_nullifier_map(block.height(), block.ironwood().nullifier_map())?;
             note_positions.extend(block.transactions().iter().flat_map(|wtx| {
                 let iter = wtx
                     .sapling_outputs()
                     .iter()
                     .map(|out| (ShieldedPool::Sapling, out.note_commitment_tree_position()));
                 #[cfg(feature = "orchard")]
-                let iter = iter.chain(
-                    wtx.orchard_outputs()
-                        .iter()
-                        .map(|out| (ShieldedPool::Orchard, out.note_commitment_tree_position())),
-                );
+                let iter = iter.chain(wtx.orchard_outputs().iter().map(|out| {
+                    (
+                        ShieldedProtocol::Orchard,
+                        out.note_commitment_tree_position(),
+                    )
+                }));
+                #[cfg(feature = "orchard")]
+                let iter = iter.chain(wtx.ironwood_outputs().iter().map(|out| {
+                    (
+                        ShieldedProtocol::Ironwood,
+                        out.note_commitment_tree_position(),
+                    )
+                }));
 
                 iter
             }));
@@ -428,6 +470,12 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
                 orchard_commitment_tree_size: Some(block.orchard().final_tree_size()),
                 #[cfg(feature = "orchard")]
                 orchard_action_count: Some(block.orchard().commitments().len().try_into().unwrap()),
+                #[cfg(feature = "orchard")]
+                ironwood_commitment_tree_size: Some(block.ironwood().final_tree_size()),
+                #[cfg(feature = "orchard")]
+                ironwood_action_count: Some(
+                    block.ironwood().commitments().len().try_into().unwrap(),
+                ),
             };
 
             // Insert transaction metadata into the transaction table
@@ -443,6 +491,8 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
             sapling_commitments.extend(block_commitments.sapling.into_iter().map(Some));
             #[cfg(feature = "orchard")]
             orchard_commitments.extend(block_commitments.orchard.into_iter().map(Some));
+            #[cfg(feature = "orchard")]
+            ironwood_commitments.extend(block_commitments.ironwood.into_iter().map(Some));
         }
 
         // Drop nullifier-map entries that can no longer be matched, as the upstream `put_blocks` does.
@@ -486,7 +536,27 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
                 .map(|res| (res.subtree, res.checkpoints))
                 .collect::<Vec<_>>();
 
-            // Collect the complete set of Sapling checkpoints
+            // The Ironwood tree is Orchard-shaped, so its subtrees are built the same way.
+            #[cfg(feature = "orchard")]
+            let ironwood_subtrees = ironwood_commitments
+                .par_chunks_mut(CHUNK_SIZE)
+                .enumerate()
+                .filter_map(|(i, chunk)| {
+                    let start = start_positions.ironwood_start_position + (i * CHUNK_SIZE) as u64;
+                    let end = start + chunk.len() as u64;
+
+                    shardtree::LocatedTree::from_iter(
+                        start..end,
+                        ORCHARD_SHARD_HEIGHT.into(),
+                        chunk.iter_mut().map(|n| n.take().expect("always Some")),
+                    )
+                })
+                .map(|res| (res.subtree, res.checkpoints))
+                .collect::<Vec<_>>();
+
+            // Collect the complete set of checkpoints in each tree, so that every tree can be
+            // given a checkpoint at each height any other tree is checkpointed at. Anchors are
+            // selected per height across all trees, so the sets must line up.
             #[cfg(feature = "orchard")]
             let sapling_checkpoint_positions: BTreeMap<BlockHeight, Position> = sapling_subtrees
                 .iter()
@@ -502,16 +572,40 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
                 .collect();
 
             #[cfg(feature = "orchard")]
-            let (missing_sapling_checkpoints, missing_orchard_checkpoints) = (
+            let ironwood_checkpoint_positions: BTreeMap<BlockHeight, Position> = ironwood_subtrees
+                .iter()
+                .flat_map(|(_, checkpoints)| checkpoints.iter())
+                .map(|(k, v)| (*k, *v))
+                .collect();
+
+            #[cfg(feature = "orchard")]
+            let all_checkpoint_heights: BTreeSet<BlockHeight> = sapling_checkpoint_positions
+                .keys()
+                .chain(orchard_checkpoint_positions.keys())
+                .chain(ironwood_checkpoint_positions.keys())
+                .copied()
+                .collect();
+
+            #[cfg(feature = "orchard")]
+            let (
+                missing_sapling_checkpoints,
+                missing_orchard_checkpoints,
+                missing_ironwood_checkpoints,
+            ) = (
                 ensure_checkpoints(
-                    orchard_checkpoint_positions.keys(),
+                    all_checkpoint_heights.iter(),
                     &sapling_checkpoint_positions,
                     from_state.final_sapling_tree(),
                 ),
                 ensure_checkpoints(
-                    sapling_checkpoint_positions.keys(),
+                    all_checkpoint_heights.iter(),
                     &orchard_checkpoint_positions,
                     from_state.final_orchard_tree(),
+                ),
+                ensure_checkpoints(
+                    all_checkpoint_heights.iter(),
+                    &ironwood_checkpoint_positions,
+                    from_state.final_ironwood_tree(),
                 ),
             );
 
@@ -586,6 +680,45 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
                         for (height, checkpoint) in &missing_orchard_checkpoints {
                             if *height > min_checkpoint_height {
                                 orchard_tree
+                                    .store_mut()
+                                    .add_checkpoint(*height, checkpoint.clone())
+                                    .map_err(ShardTreeError::Storage)?;
+                            }
+                        }
+                    }
+                    Ok(())
+                })?;
+            }
+
+            // Update the Ironwood note commitment tree with all newly read note commitments
+            #[cfg(feature = "orchard")]
+            {
+                let mut ironwood_subtrees = ironwood_subtrees.into_iter();
+                self.with_ironwood_tree_mut::<_, _, Self::Error>(|ironwood_tree| {
+                    ironwood_tree.insert_frontier(
+                        from_state.final_ironwood_tree().clone(),
+                        Retention::Checkpoint {
+                            id: from_state.block_height(),
+                            marking: Marking::Reference,
+                        },
+                    )?;
+
+                    for (tree, checkpoints) in &mut ironwood_subtrees {
+                        ironwood_tree.insert_tree(tree, checkpoints)?;
+                    }
+
+                    // Ensure we have an Ironwood checkpoint for each checkpointed block height in
+                    // the other trees, skipping heights below the minimum retained checkpoint.
+                    {
+                        let min_checkpoint_height = ironwood_tree
+                            .store()
+                            .min_checkpoint_id()
+                            .map_err(ShardTreeError::Storage)?
+                            .expect("At least one checkpoint was inserted (by insert_frontier)");
+
+                        for (height, checkpoint) in &missing_ironwood_checkpoints {
+                            if *height > min_checkpoint_height {
+                                ironwood_tree
                                     .store_mut()
                                     .add_checkpoint(*height, checkpoint.clone())
                                     .map_err(ShardTreeError::Storage)?;
@@ -733,8 +866,14 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
             }
         }
 
+        // Orchard and Ironwood outputs are decrypted with the same keys and recorded the same
+        // way; each output carries the value pool it was found in.
         #[cfg(feature = "orchard")]
-        for output in d_tx.orchard_outputs() {
+        for output in d_tx
+            .orchard_outputs()
+            .iter()
+            .chain(d_tx.ironwood_outputs().iter())
+        {
             #[cfg(feature = "transparent-inputs")]
             {
                 tx_has_wallet_outputs = true;
@@ -758,7 +897,9 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
 
                         Recipient::External {
                             recipient_address: wallet_address,
-                            output_pool: PoolType::ORCHARD,
+                            output_pool: PoolType::Shielded(shielded_protocol_for_value_pool(
+                                output.note().1,
+                            )),
                         }
                     };
 
@@ -962,8 +1103,9 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
         {
             let detectable_via_scanning = d_tx.tx().sapling_bundle().is_some();
             #[cfg(feature = "orchard")]
-            let detectable_via_scanning =
-                detectable_via_scanning | d_tx.tx().orchard_bundle().is_some();
+            let detectable_via_scanning = detectable_via_scanning
+                | d_tx.tx().orchard_bundle().is_some()
+                | d_tx.tx().ironwood_bundle().is_some();
 
             if d_tx.mined_height().is_none() && !detectable_via_scanning {
                 self.transaction_data_request_queue
@@ -1007,6 +1149,20 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
 
                 checkpoint_heights = checkpoint_heights
                     .intersection(&orchard_checkpoint_heights)
+                    .copied()
+                    .collect();
+
+                let mut ironwood_checkpoint_heights = BTreeSet::new();
+                self.ironwood_tree.store().for_each_checkpoint(
+                    self.ironwood_tree.store().checkpoint_count()?,
+                    |height, _| {
+                        ironwood_checkpoint_heights.insert(u32::from(*height));
+                        Ok(())
+                    },
+                )?;
+
+                checkpoint_heights = checkpoint_heights
+                    .intersection(&ironwood_checkpoint_heights)
                     .copied()
                     .collect();
             }
@@ -1074,6 +1230,10 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
             })?;
             #[cfg(feature = "orchard")]
             self.with_orchard_tree_mut(|tree| {
+                tree.truncate_to_checkpoint(&truncation_height).map(|_| ())
+            })?;
+            #[cfg(feature = "orchard")]
+            self.with_ironwood_tree_mut(|tree| {
                 tree.truncate_to_checkpoint(&truncation_height).map(|_| ())
             })?;
 
@@ -1180,6 +1340,27 @@ Instead derive the ufvk in the calling code and import it using `import_account_
 
                 #[cfg(not(feature = "orchard"))]
                 panic!("Sent a transaction with Orchard Actions without `orchard` enabled?");
+            }
+            // Mark ironwood notes as spent
+            if let Some(_bundle) = sent_tx.tx().ironwood_bundle() {
+                #[cfg(feature = "orchard")]
+                {
+                    detectable_via_scanning = true;
+                    for action in _bundle.actions() {
+                        match self
+                            .mark_ironwood_note_spent(*action.nullifier(), sent_tx.tx().txid())
+                        {
+                            Ok(()) => {}
+                            Err(Error::NoteNotFound) => {
+                                // Dummy spends and spends of notes this wallet does not hold.
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                }
+
+                #[cfg(not(feature = "orchard"))]
+                panic!("Sent a transaction with Ironwood Actions without `orchard` enabled?");
             }
             // Mark transparent UTXOs as spent
             #[cfg(feature = "transparent-inputs")]

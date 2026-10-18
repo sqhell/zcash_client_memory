@@ -27,11 +27,18 @@ impl Deref for NullifierMap {
     }
 }
 
+/// A nullifier tagged with the pool it belongs to.
+///
+/// Ironwood (NU6.3) nullifiers have the Orchard nullifier type but are revealed in a separate
+/// pool with its own note commitment tree, so the tag keeps the two pools' entries apart in the
+/// nullifier map and the received-note index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Nullifier {
     Sapling(sapling::Nullifier),
     #[cfg(feature = "orchard")]
     Orchard(orchard::note::Nullifier),
+    #[cfg(feature = "orchard")]
+    Ironwood(orchard::note::Nullifier),
 }
 
 impl Nullifier {
@@ -40,6 +47,17 @@ impl Nullifier {
             Nullifier::Sapling(_) => PoolType::SAPLING,
             #[cfg(feature = "orchard")]
             Nullifier::Orchard(_) => PoolType::ORCHARD,
+            #[cfg(feature = "orchard")]
+            Nullifier::Ironwood(_) => PoolType::IRONWOOD,
+        }
+    }
+
+    /// Tags an Orchard-shaped nullifier with the value pool its note belongs to.
+    #[cfg(feature = "orchard")]
+    pub(crate) fn orchard_family(pool: orchard::ValuePool, nf: orchard::note::Nullifier) -> Self {
+        match pool {
+            orchard::ValuePool::Orchard => Nullifier::Orchard(nf),
+            orchard::ValuePool::Ironwood => Nullifier::Ironwood(nf),
         }
     }
 }
@@ -47,13 +65,6 @@ impl Nullifier {
 impl From<sapling::Nullifier> for Nullifier {
     fn from(n: sapling::Nullifier) -> Self {
         Nullifier::Sapling(n)
-    }
-}
-
-#[cfg(feature = "orchard")]
-impl From<orchard::note::Nullifier> for Nullifier {
-    fn from(n: orchard::note::Nullifier) -> Self {
-        Nullifier::Orchard(n)
     }
 }
 
@@ -73,6 +84,11 @@ mod serialization {
                     protocol: proto::ShieldedProtocol::Orchard.into(),
                     nullifier: n.to_bytes().to_vec(),
                 },
+                #[cfg(feature = "orchard")]
+                Nullifier::Ironwood(n) => Self {
+                    protocol: proto::ShieldedProtocol::Ironwood.into(),
+                    nullifier: n.to_bytes().to_vec(),
+                },
             }
         }
     }
@@ -81,6 +97,12 @@ mod serialization {
         type Error = Error;
 
         fn try_from(nullifier: proto::Nullifier) -> Result<Self, Self::Error> {
+            #[cfg(feature = "orchard")]
+            let orchard_nf = |bytes: Vec<u8>| -> Result<orchard::note::Nullifier, Error> {
+                orchard::note::Nullifier::from_bytes(&bytes.try_into()?)
+                    .into_option()
+                    .ok_or(Error::CorruptedData("Invalid Orchard nullifier".into()))
+            };
             Ok(match nullifier.protocol() {
                 proto::ShieldedProtocol::Sapling => {
                     Nullifier::Sapling(sapling::Nullifier::from_slice(&nullifier.nullifier)?)
@@ -89,11 +111,13 @@ mod serialization {
                     #[cfg(not(feature = "orchard"))]
                     return Err(Error::Other("Orchard support is not enabled".into()));
                     #[cfg(feature = "orchard")]
-                    Nullifier::Orchard(
-                        orchard::note::Nullifier::from_bytes(&nullifier.nullifier.try_into()?)
-                            .into_option()
-                            .ok_or(Error::CorruptedData("Invalid Orchard nullifier".into()))?,
-                    )
+                    Nullifier::Orchard(orchard_nf(nullifier.nullifier)?)
+                }
+                proto::ShieldedProtocol::Ironwood => {
+                    #[cfg(not(feature = "orchard"))]
+                    return Err(Error::Other("Orchard support is not enabled".into()));
+                    #[cfg(feature = "orchard")]
+                    Nullifier::Ironwood(orchard_nf(nullifier.nullifier)?)
                 }
             })
         }

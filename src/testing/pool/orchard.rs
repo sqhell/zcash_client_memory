@@ -169,3 +169,24 @@ fn scan_cached_blocks_detects_spends_out_of_order() {
 fn receive_two_notes_with_same_value() {
     testing::pool::receive_two_notes_with_same_value::<OrchardPoolTester>()
 }
+
+// NU6.3 (Ironwood) cases from the backend harness. These exercise the Ironwood note
+// commitment tree and the Ironwood routing of Orchard-receiver payments. The harness's
+// coinbase-shielding cases are not included: the store cannot select coinbase outputs
+// (its transaction table never learns a pure-transparent transaction's block index, so the
+// coinbase filter excludes them), which fails before anything Ironwood-specific runs.
+
+#[test]
+fn create_pczt_supports_ironwood_output() {
+    testing::pool::create_pczt_supports_ironwood_output()
+}
+
+#[test]
+fn propose_v5_payment_to_orchard_receiver_is_rejected() {
+    testing::pool::propose_v5_payment_to_orchard_receiver_is_rejected()
+}
+
+#[test]
+fn proposal_records_and_serializes_proposed_version() {
+    testing::pool::proposal_records_and_serializes_proposed_version()
+}

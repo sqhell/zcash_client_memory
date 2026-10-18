@@ -133,10 +133,26 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
             Vec::new()
         };
 
+        #[cfg(feature = "orchard")]
+        let ironwood_eligible_notes = if sources.contains(&ShieldedProtocol::Ironwood) {
+            self.select_spendable_notes_from_pool(
+                account,
+                target_value,
+                &ShieldedProtocol::Ironwood,
+                target_height,
+                confirmations_policy,
+                exclude,
+            )?
+        } else {
+            Vec::new()
+        };
+
         to_spendable_notes(
             &sapling_eligible_notes,
             #[cfg(feature = "orchard")]
             &orchard_eligible_notes,
+            #[cfg(feature = "orchard")]
+            &ironwood_eligible_notes,
         )
     }
 

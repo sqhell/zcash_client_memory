@@ -278,7 +278,10 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
                 PoolType::ORCHARD => {
                     account_balance.with_orchard_balance_mut(update_balance_with_note)?;
                 }
-                _ => unimplemented!("Unknown pool type"),
+                PoolType::IRONWOOD => {
+                    account_balance.with_ironwood_balance_mut(update_balance_with_note)?;
+                }
+                PoolType::Transparent => unreachable!("received notes are shielded"),
             }
         }
 
@@ -314,7 +317,15 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
             .map(|s| s.root_addr().index())
             .unwrap_or(0);
 
-        // Treat Sapling and Orchard outputs as having the same cost to scan.
+        #[cfg(feature = "orchard")]
+        let next_ironwood_subtree_index = self
+            .ironwood_tree
+            .store()
+            .last_shard()?
+            .map(|s| s.root_addr().index())
+            .unwrap_or(0);
+
+        // Treat Sapling, Orchard and Ironwood outputs as having the same cost to scan.
         let sapling_scan_progress =
             self.sapling_scan_progress(&birthday_height, &fully_scanned_height, &chain_tip_height)?;
         #[cfg(feature = "orchard")]
@@ -322,17 +333,30 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
             self.orchard_scan_progress(&birthday_height, &fully_scanned_height, &chain_tip_height)?;
         #[cfg(not(feature = "orchard"))]
         let orchard_scan_progress: Option<Ratio<u64>> = None;
+        #[cfg(feature = "orchard")]
+        let ironwood_scan_progress = self.ironwood_scan_progress(
+            &birthday_height,
+            &fully_scanned_height,
+            &chain_tip_height,
+        )?;
+        #[cfg(not(feature = "orchard"))]
+        let ironwood_scan_progress: Option<Ratio<u64>> = None;
 
-        let scan_progress = sapling_scan_progress
-            .zip(orchard_scan_progress)
-            .map(|(s, o)| {
-                Ratio::new(
-                    s.numerator() + o.numerator(),
-                    s.denominator() + o.denominator(),
-                )
-            })
-            .or(sapling_scan_progress)
-            .or(orchard_scan_progress);
+        let combine = |a: Option<Ratio<u64>>, b: Option<Ratio<u64>>| {
+            a.zip(b)
+                .map(|(a, b)| {
+                    Ratio::new(
+                        a.numerator() + b.numerator(),
+                        a.denominator() + b.denominator(),
+                    )
+                })
+                .or(a)
+                .or(b)
+        };
+        let scan_progress = combine(
+            combine(sapling_scan_progress, orchard_scan_progress),
+            ironwood_scan_progress,
+        );
 
         // TODO: This won't work
         let scan_progress = Progress::new(scan_progress.unwrap(), Some(Ratio::new(0, 0)));
@@ -345,10 +369,8 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
             next_sapling_subtree_index,
             #[cfg(feature = "orchard")]
             next_orchard_subtree_index,
-            // The in-memory backend maintains no separate Ironwood (NU6.3) note commitment tree,
-            // so no Ironwood subtrees have been scanned; the next index is the initial 0.
             #[cfg(feature = "orchard")]
-            0,
+            next_ironwood_subtree_index,
         );
         Ok(Some(summary))
     }
@@ -382,6 +404,8 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
                 sapling_commitment_tree_size,
                 #[cfg(feature = "orchard")]
                 orchard_commitment_tree_size,
+                #[cfg(feature = "orchard")]
+                ironwood_commitment_tree_size,
                 ..
             } = block;
             // TODO: Deal with legacy sapling trees
@@ -391,10 +415,8 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
                 *sapling_commitment_tree_size,
                 #[cfg(feature = "orchard")]
                 *orchard_commitment_tree_size,
-                // The in-memory backend does not track an Ironwood (NU6.3) note commitment tree, so
-                // its size is unknown for every block.
                 #[cfg(feature = "orchard")]
-                None,
+                *ironwood_commitment_tree_size,
             )
         }))
     }
@@ -483,12 +505,21 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
                 self.get_orchard_max_checkpointed_height(chain_tip_height, min_confirmations)?;
             #[cfg(not(feature = "orchard"))]
             let orchard_anchor_height: Option<BlockHeight> = None;
+            #[cfg(feature = "orchard")]
+            let ironwood_anchor_height =
+                self.get_ironwood_max_checkpointed_height(chain_tip_height, min_confirmations)?;
+            #[cfg(not(feature = "orchard"))]
+            let ironwood_anchor_height: Option<BlockHeight> = None;
 
-            let anchor_height = sapling_anchor_height
-                .zip(orchard_anchor_height)
-                .map(|(s, o)| std::cmp::min(s, o))
-                .or(sapling_anchor_height)
-                .or(orchard_anchor_height);
+            // The anchor is the newest height every tree that has checkpoints can anchor at.
+            let anchor_height = [
+                sapling_anchor_height,
+                orchard_anchor_height,
+                ironwood_anchor_height,
+            ]
+            .into_iter()
+            .flatten()
+            .min();
 
             Ok(anchor_height.map(|h| (TargetHeight::from(chain_tip_height + 1), h)))
         } else {
@@ -667,13 +698,38 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
     #[cfg(feature = "orchard")]
     fn get_ironwood_nullifiers(
         &self,
-        _query: NullifierQuery,
+        query: NullifierQuery,
     ) -> Result<Vec<(Self::AccountId, orchard::note::Nullifier)>, Self::Error> {
         tracing::debug!("get_ironwood_nullifiers");
-        // The in-memory backend does not currently scan or store Ironwood (NU6.3) notes, so it
-        // tracks no Ironwood nullifiers. Returning an empty set is the correct answer for a wallet
-        // that holds no Ironwood notes; it is called on the scan path, so it must not panic.
-        Ok(Vec::new())
+        let nullifiers = self.received_notes.get_ironwood_nullifiers();
+        Ok(match query {
+            NullifierQuery::All => nullifiers
+                .map(|(account_id, _, nf)| (account_id, nf))
+                .collect(),
+            NullifierQuery::Unspent => nullifiers
+                .filter_map(|(account_id, _, nf)| {
+                    // find any tx we know of that spends this nullifier and if so require that it is unmined or expired
+                    if let Some((height, tx_index)) = self.nullifiers.get(&Nullifier::Ironwood(nf))
+                    {
+                        if let Some(spending_tx) =
+                            self.tx_table.get_by_height_and_index(*height, *tx_index)
+                        {
+                            if matches!(spending_tx.status(), TransactionStatus::Mined(_))
+                                || spending_tx.expiry_height().is_none()
+                            {
+                                None
+                            } else {
+                                Some((account_id, nf))
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        Some((account_id, nf))
+                    }
+                })
+                .collect(),
+        })
     }
 
     #[cfg(feature = "transparent-inputs")]

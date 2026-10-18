@@ -800,12 +800,22 @@ mod serialization {
             #[cfg(not(feature = "orchard"))]
             let orchard_tree_bytes = vec![];
 
+            #[cfg(feature = "orchard")]
+            let ironwood_tree_bytes = {
+                let mut ironwood_tree_bytes = vec![];
+                write_frontier_v1(&mut ironwood_tree_bytes, cstate.final_ironwood_tree())?;
+                ironwood_tree_bytes
+            };
+            #[cfg(not(feature = "orchard"))]
+            let ironwood_tree_bytes = vec![];
+
             Ok(Self {
                 prior_chain_state: Some(proto::ChainState {
                     block_height: cstate.block_height().into(),
                     block_hash: cstate.block_hash().0.to_vec(),
                     final_sapling_tree: sapling_tree_bytes,
                     final_orchard_tree: orchard_tree_bytes,
+                    final_ironwood_tree: ironwood_tree_bytes,
                 }),
                 recover_until: birthday.recover_until().map(|r| r.into()),
             })
@@ -823,10 +833,14 @@ mod serialization {
                 read_frontier_v1(&cs.final_sapling_tree[..])?,
                 #[cfg(feature = "orchard")]
                 read_frontier_v1(&cs.final_orchard_tree[..])?,
-                // The in-memory backend does not persist an Ironwood (NU6.3) note commitment
-                // frontier, so its chain state is reconstructed as an empty Ironwood tree.
+                // Wallets saved before Ironwood support carry no Ironwood frontier; those
+                // accounts were created before NU6.3 activation, when the tree was empty.
                 #[cfg(feature = "orchard")]
-                incrementalmerkletree::frontier::Frontier::empty(),
+                if cs.final_ironwood_tree.is_empty() {
+                    incrementalmerkletree::frontier::Frontier::empty()
+                } else {
+                    read_frontier_v1(&cs.final_ironwood_tree[..])?
+                },
             );
 
             let recover_until = birthday.recover_until.map(|r| r.into());
