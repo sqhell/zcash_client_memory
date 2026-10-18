@@ -1,5 +1,7 @@
+#[cfg(feature = "orchard")]
+use std::collections::BTreeSet;
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     ops::Range,
 };
 
@@ -8,6 +10,7 @@ use secrecy::{ExposeSecret, SecretVec};
 
 use ::transparent::bundle::OutPoint;
 use incrementalmerkletree::{Marking, Position, Retention};
+#[cfg(feature = "orchard")]
 use shardtree::store::ShardStore;
 use zcash_client_backend::{
     TransferType,
@@ -1324,44 +1327,16 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
     /// This should only be executed inside a transactional context.
     fn truncate_to_height_inner(&mut self, max_height: BlockHeight) -> Result<BlockHeight, Error> {
         let truncation_height = {
-            // The intersection of the checkpoint heights of every tree that has checkpoints.
-            let mut checkpoint_heights = BTreeSet::new();
-            self.sapling_tree.store().for_each_checkpoint(
-                self.sapling_tree.store().checkpoint_count()?,
-                |height, _| {
-                    checkpoint_heights.insert(u32::from(*height));
-                    Ok(())
-                },
-            )?;
-            #[cfg(feature = "orchard")]
-            {
-                // A tree without checkpoints has nothing to roll back and must not veto the
-                // rewind, as in `zcash_client_sqlite`: the Orchard tree is empty before NU5 and
-                // the Ironwood tree before NU6.3, or in a wallet restored from a snapshot taken
-                // before Ironwood support that has not scanned a block since.
-                for store in [self.orchard_tree.store(), self.ironwood_tree.store()] {
-                    let mut tree_checkpoint_heights = BTreeSet::new();
-                    store.for_each_checkpoint(store.checkpoint_count()?, |height, _| {
-                        tree_checkpoint_heights.insert(u32::from(*height));
-                        Ok(())
-                    })?;
-                    if !tree_checkpoint_heights.is_empty() {
-                        checkpoint_heights = checkpoint_heights
-                            .intersection(&tree_checkpoint_heights)
-                            .copied()
-                            .collect();
-                    }
-                }
-            }
+            let mut checkpoint_heights = self.rewindable_checkpoint_heights()?;
             // All the checkpoints that are greater than the truncation height
-            let over = checkpoint_heights.split_off(&(u32::from(max_height + 1)));
+            let over = checkpoint_heights.split_off(&(max_height + 1));
             if let Some(height) = checkpoint_heights.last().copied() {
-                Ok(BlockHeight::from(height))
+                Ok(height)
             } else {
                 // If there are no checkpoints that are less than or equal to the truncation height
                 // then we can't truncate the tree.
                 Err(Error::RequestedRewindInvalid(
-                    over.first().copied().map(Into::into),
+                    over.first().copied(),
                     max_height,
                 ))
             }

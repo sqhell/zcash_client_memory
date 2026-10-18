@@ -951,6 +951,35 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         self.ironwood_tree_shard_end_heights.values().max().copied()
     }
 
+    /// The heights a rewind can land on: every height at which the Sapling tree has a checkpoint
+    /// and each other tree that has any checkpoints has one too. Anchors are selected per height
+    /// across all trees, so a rewind must leave every tree checkpointed at the same height.
+    ///
+    /// A tree without checkpoints has nothing to roll back and does not veto a rewind, as in
+    /// `zcash_client_sqlite`: the Orchard tree is empty before NU5 and the Ironwood tree before
+    /// NU6.3, or in a wallet restored from a snapshot taken before Ironwood support that has not
+    /// scanned a block since.
+    pub(crate) fn rewindable_checkpoint_heights(&self) -> Result<BTreeSet<BlockHeight>, Error> {
+        let sapling_checkpoints = checkpoint_heights(self.sapling_tree.store())?;
+        #[cfg(not(feature = "orchard"))]
+        let rewindable = sapling_checkpoints;
+        #[cfg(feature = "orchard")]
+        let rewindable = {
+            let mut rewindable = sapling_checkpoints;
+            for store in [self.orchard_tree.store(), self.ironwood_tree.store()] {
+                let tree_checkpoint_heights = checkpoint_heights(store)?;
+                if !tree_checkpoint_heights.is_empty() {
+                    rewindable = rewindable
+                        .intersection(&tree_checkpoint_heights)
+                        .copied()
+                        .collect();
+                }
+            }
+            rewindable
+        };
+        Ok(rewindable)
+    }
+
     pub(crate) fn get_sapling_max_checkpointed_height(
         &self,
         chain_tip_height: BlockHeight,
@@ -1649,6 +1678,18 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
             })
             .collect()
     }
+}
+
+/// The heights of every checkpoint in `store`.
+fn checkpoint_heights<H: Clone>(
+    store: &MemoryShardStore<H, BlockHeight>,
+) -> Result<BTreeSet<BlockHeight>, Error> {
+    let mut heights = BTreeSet::new();
+    store.for_each_checkpoint(store.checkpoint_count()?, |height, _| {
+        heights.insert(*height);
+        Ok(())
+    })?;
+    Ok(heights)
 }
 
 /// Returns the greatest checkpoint height in `store` whose block has at least
