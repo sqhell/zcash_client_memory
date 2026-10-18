@@ -148,8 +148,8 @@ impl<P: Parameters> MemoryWalletDb<P> {
             proto_wallet
                 .scan_queue
                 .into_iter()
-                .map(|item| item.into())
-                .collect(),
+                .map(TryInto::try_into)
+                .collect::<Result<_>>()?,
         );
 
         wallet.sapling_tree =
@@ -471,5 +471,31 @@ impl<P: Parameters> From<&MemoryWalletDb<P>> for proto::MemoryWallet {
                 .map(Into::into)
                 .collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use zcash_protocol::consensus::Network;
+
+    #[test]
+    fn decode_rejects_unknown_scan_priority() {
+        let wallet = MemoryWalletDb::new(Network::TestNetwork, 100);
+        let mut proto_wallet = proto::MemoryWallet::from(&wallet);
+        proto_wallet.scan_queue.push(proto::ScanQueueRecord {
+            start_height: 10,
+            end_height: 20,
+            priority: 99,
+        });
+        let bytes = proto_wallet.encode_to_vec();
+
+        assert!(matches!(
+            MemoryWalletDb::decode_new(&bytes[..], Network::TestNetwork, 100),
+            Err(Error::UnknownEnumValue {
+                field: "priority",
+                value: 99
+            })
+        ));
     }
 }

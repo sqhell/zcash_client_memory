@@ -591,6 +591,7 @@ mod serialization {
     use zip32::fingerprint::SeedFingerprint;
 
     use super::*;
+    use crate::error::proto_enum;
     use crate::proto::memwallet as proto;
     use crate::read_optional;
 
@@ -607,16 +608,18 @@ mod serialization {
         }
     }
 
-    impl From<proto::Accounts> for Accounts {
-        fn from(accounts: proto::Accounts) -> Self {
-            Self {
+    impl TryFrom<proto::Accounts> for Accounts {
+        type Error = crate::Error;
+
+        fn try_from(accounts: proto::Accounts) -> Result<Self, Self::Error> {
+            Ok(Self {
                 nonce: accounts.account_nonce,
                 accounts: accounts
                     .accounts
                     .into_iter()
-                    .map(|acc| (AccountId(acc.account_id), acc.try_into().unwrap()))
-                    .collect(),
-            }
+                    .map(|acc| Ok((AccountId(acc.account_id), acc.try_into()?)))
+                    .collect::<Result<_, Error>>()?,
+            })
         }
     }
 
@@ -696,22 +699,28 @@ mod serialization {
         type Error = crate::Error;
 
         fn try_from(acc: proto::Account) -> Result<Self, Self::Error> {
+            let kind = proto_enum::<proto::AccountKind>("kind", acc.kind)?;
             Ok(Self {
                 account_name: acc.account_name.clone(),
                 account_id: acc.account_id.into(),
-                kind: match acc.kind {
-                    0 => AccountSource::Derived {
+                kind: match kind {
+                    proto::AccountKind::Derived => AccountSource::Derived {
                         derivation: Zip32Derivation::new(
-                            SeedFingerprint::from_bytes(acc.seed_fingerprint().try_into()?),
+                            SeedFingerprint::from_bytes(
+                                read_optional!(acc, seed_fingerprint)?.try_into()?,
+                            ),
                             read_optional!(acc, account_index)?.try_into()?,
                             #[cfg(feature = "zcashd-compat")]
                             None,
                         ),
                         key_source: acc.key_source,
                     },
-                    1 => AccountSource::Imported {
-                        purpose: match read_optional!(acc, purpose)? {
-                            0 => AccountPurpose::Spending {
+                    proto::AccountKind::Imported => AccountSource::Imported {
+                        purpose: match proto_enum::<proto::AccountPurpose>(
+                            "purpose",
+                            read_optional!(acc, purpose)?,
+                        )? {
+                            proto::AccountPurpose::Spending => AccountPurpose::Spending {
                                 derivation: match acc.seed_fingerprint.as_ref() {
                                     Some(seed_fingerprint) => Some(Zip32Derivation::new(
                                         SeedFingerprint::from_bytes(
@@ -724,12 +733,10 @@ mod serialization {
                                     None => None,
                                 },
                             },
-                            1 => AccountPurpose::ViewOnly,
-                            _ => unreachable!(),
+                            proto::AccountPurpose::ViewOnly => AccountPurpose::ViewOnly,
                         },
                         key_source: acc.key_source,
                     },
-                    _ => unreachable!(),
                 },
                 viewing_key: UnifiedFullViewingKey::decode(&EncodingParams, &acc.viewing_key)
                     .map_err(Error::UfvkDecodeError)?,
@@ -908,6 +915,80 @@ mod serialization {
                 proto_acc.birthday.is_some() || proto_acc.birthday.is_none(),
                 "Birthday field should serialize without panicking"
             );
+        }
+
+        fn imported_proto_account(purpose: AccountPurpose) -> proto::Account {
+            let acc = Account::new(
+                "account".to_string(),
+                AccountId(3),
+                AccountSource::Imported {
+                    purpose,
+                    key_source: None,
+                },
+                UnifiedFullViewingKey::decode(&EncodingParams, TEST_VK).unwrap(),
+                AccountBirthday::from_sapling_activation(
+                    &EncodingParams,
+                    BlockHash::from_slice(&[0; 32]),
+                ),
+            )
+            .unwrap();
+            acc.into()
+        }
+
+        #[test]
+        fn unknown_account_kind_is_an_error() {
+            let proto_acc = proto::Account {
+                kind: 5,
+                ..imported_proto_account(AccountPurpose::ViewOnly)
+            };
+            assert!(matches!(
+                Account::try_from(proto_acc),
+                Err(Error::UnknownEnumValue {
+                    field: "kind",
+                    value: 5
+                })
+            ));
+        }
+
+        #[test]
+        fn unknown_account_purpose_is_an_error() {
+            let proto_acc = proto::Account {
+                purpose: Some(9),
+                ..imported_proto_account(AccountPurpose::ViewOnly)
+            };
+            assert!(matches!(
+                Account::try_from(proto_acc),
+                Err(Error::UnknownEnumValue {
+                    field: "purpose",
+                    value: 9
+                })
+            ));
+        }
+
+        #[test]
+        fn imported_account_without_purpose_is_an_error() {
+            let proto_acc = proto::Account {
+                purpose: None,
+                ..imported_proto_account(AccountPurpose::ViewOnly)
+            };
+            assert!(matches!(
+                Account::try_from(proto_acc),
+                Err(Error::ProtoMissingField("purpose"))
+            ));
+        }
+
+        #[test]
+        fn derived_account_without_seed_fingerprint_is_an_error() {
+            let proto_acc = proto::Account {
+                kind: proto::AccountKind::Derived as i32,
+                seed_fingerprint: None,
+                account_index: Some(0),
+                ..imported_proto_account(AccountPurpose::ViewOnly)
+            };
+            assert!(matches!(
+                Account::try_from(proto_acc),
+                Err(Error::ProtoMissingField("seed_fingerprint"))
+            ));
         }
 
         #[test]

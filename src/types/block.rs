@@ -105,15 +105,8 @@ mod serialization {
                     .memos
                     .into_iter()
                     .map(|memo| {
-                        let note_id = read_optional!(memo, note_id)?;
-                        Ok((
-                            NoteId::new(
-                                read_optional!(note_id.clone(), tx_id)?.try_into()?,
-                                crate::types::notes::shielded_protocol_from_proto(note_id.pool())?,
-                                note_id.output_index as u16,
-                            ),
-                            MemoBytes::from_bytes(&memo.memo)?,
-                        ))
+                        let note_id = NoteId::try_from(read_optional!(memo, note_id)?)?;
+                        Ok((note_id, MemoBytes::from_bytes(&memo.memo)?))
                     })
                     .collect::<Result<_>>()?,
                 sapling_commitment_tree_size: block.sapling_commitment_tree_size,

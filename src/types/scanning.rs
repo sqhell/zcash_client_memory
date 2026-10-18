@@ -160,7 +160,7 @@ impl DerefMut for ScanQueue {
 
 mod serialization {
     use super::*;
-    use crate::proto::memwallet as proto;
+    use crate::{error::proto_enum, proto::memwallet as proto};
 
     impl From<(BlockHeight, BlockHeight, ScanPriority)> for proto::ScanQueueRecord {
         fn from(
@@ -182,21 +182,67 @@ mod serialization {
         }
     }
 
-    impl From<proto::ScanQueueRecord> for (BlockHeight, BlockHeight, ScanPriority) {
-        fn from(record: proto::ScanQueueRecord) -> Self {
-            (
+    impl TryFrom<proto::ScanQueueRecord> for (BlockHeight, BlockHeight, ScanPriority) {
+        type Error = Error;
+
+        fn try_from(record: proto::ScanQueueRecord) -> Result<Self, Error> {
+            // The prost accessor would map an unknown priority to `Ignored`, and a range that is
+            // silently ignored is never scanned.
+            let priority = match proto_enum::<proto::ScanPriority>("priority", record.priority)? {
+                proto::ScanPriority::Ignored => ScanPriority::Ignored,
+                proto::ScanPriority::Scanned => ScanPriority::Scanned,
+                proto::ScanPriority::Historic => ScanPriority::Historic,
+                proto::ScanPriority::OpenAdjacent => ScanPriority::OpenAdjacent,
+                proto::ScanPriority::FoundNote => ScanPriority::FoundNote,
+                proto::ScanPriority::ChainTip => ScanPriority::ChainTip,
+                proto::ScanPriority::Verify => ScanPriority::Verify,
+            };
+            Ok((
                 record.start_height.into(),
                 record.end_height.into(),
-                match record.priority() {
-                    proto::ScanPriority::Ignored => ScanPriority::Ignored,
-                    proto::ScanPriority::Scanned => ScanPriority::Scanned,
-                    proto::ScanPriority::Historic => ScanPriority::Historic,
-                    proto::ScanPriority::OpenAdjacent => ScanPriority::OpenAdjacent,
-                    proto::ScanPriority::FoundNote => ScanPriority::FoundNote,
-                    proto::ScanPriority::ChainTip => ScanPriority::ChainTip,
-                    proto::ScanPriority::Verify => ScanPriority::Verify,
-                },
-            )
+                priority,
+            ))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn unknown_scan_priority_is_an_error() {
+            let record = proto::ScanQueueRecord {
+                start_height: 10,
+                end_height: 20,
+                priority: 99,
+            };
+            assert!(matches!(
+                <(BlockHeight, BlockHeight, ScanPriority)>::try_from(record),
+                Err(Error::UnknownEnumValue {
+                    field: "priority",
+                    value: 99
+                })
+            ));
+        }
+
+        #[test]
+        fn scan_priority_roundtrip() {
+            for priority in [
+                ScanPriority::Ignored,
+                ScanPriority::Scanned,
+                ScanPriority::Historic,
+                ScanPriority::OpenAdjacent,
+                ScanPriority::FoundNote,
+                ScanPriority::ChainTip,
+                ScanPriority::Verify,
+            ] {
+                let entry = (BlockHeight::from(10), BlockHeight::from(20), priority);
+                let record = proto::ScanQueueRecord::from(entry);
+                assert_eq!(
+                    <(BlockHeight, BlockHeight, ScanPriority)>::try_from(record).unwrap(),
+                    entry
+                );
+            }
         }
     }
 }

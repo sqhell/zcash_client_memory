@@ -259,7 +259,7 @@ impl TxLocatorMap {
 
 mod serialization {
     use super::*;
-    use crate::{proto::memwallet as proto, read_optional};
+    use crate::{error::proto_enum, proto::memwallet as proto, read_optional};
 
     impl From<TransactionEntry> for proto::TransactionEntry {
         fn from(entry: TransactionEntry) -> Self {
@@ -291,8 +291,9 @@ mod serialization {
         type Error = Error;
 
         fn try_from(entry: proto::TransactionEntry) -> Result<Self, Self::Error> {
+            let tx_status = proto_enum::<proto::TransactionStatus>("tx_status", entry.tx_status)?;
             Ok(Self {
-                tx_status: match entry.tx_status() {
+                tx_status: match tx_status {
                     proto::TransactionStatus::TxidNotRecognized => {
                         TransactionStatus::TxidNotRecognized
                     }

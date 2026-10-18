@@ -190,7 +190,11 @@ impl SentNote {
 
 mod serialization {
     use super::*;
-    use crate::{error::Error, proto::memwallet as proto, read_optional};
+    use crate::{
+        error::{Error, proto_enum},
+        proto::memwallet as proto,
+        read_optional,
+    };
     use zcash_address::ZcashAddress;
     use zcash_protocol::ShieldedPool;
 
@@ -249,7 +253,7 @@ mod serialization {
         type Error = Error;
 
         fn try_from(note_id: proto::NoteId) -> Result<Self, Self::Error> {
-            Ok(match note_id.pool() {
+            Ok(match proto_enum::<proto::PoolType>("pool", note_id.pool)? {
                 proto::PoolType::Transparent => SentNoteId::Transparent {
                     txid: read_optional!(note_id, tx_id)?.try_into()?,
                     output_index: note_id.output_index,
@@ -355,13 +359,19 @@ mod serialization {
     impl TryFrom<proto::Recipient> for Recipient<AccountId> {
         type Error = Error;
         fn try_from(recipient: proto::Recipient) -> Result<Self, Self::Error> {
-            Ok(match recipient.recipient_type() {
+            let recipient_type =
+                proto_enum::<proto::RecipientType>("recipient_type", recipient.recipient_type)?;
+            Ok(match recipient_type {
                 proto::RecipientType::ExternalRecipient => {
                     let address_str = read_optional!(recipient.clone(), address)?;
                     let address = ZcashAddress::try_from_encoded(&address_str)?;
+                    let pool_type = proto_enum::<proto::PoolType>(
+                        "pool_type",
+                        read_optional!(recipient, pool_type)?,
+                    )?;
                     Recipient::External {
                         recipient_address: address,
-                        output_pool: match recipient.pool_type() {
+                        output_pool: match pool_type {
                             proto::PoolType::Transparent => PoolType::Transparent,
                             pool => PoolType::Shielded(
                                 crate::types::notes::shielded_protocol_from_proto(pool)?,
@@ -385,7 +395,7 @@ mod serialization {
                 proto::RecipientType::InternalAccount => Recipient::InternalShielded {
                     receiving_account: read_optional!(recipient, account_id)?.into(),
                     external_address: recipient.address.map(|a| a.parse()).transpose()?,
-                    note: Box::new(read_optional!(recipient, note)?.into()),
+                    note: Box::new(read_optional!(recipient, note)?.try_into()?),
                 },
                 proto::RecipientType::InternalTransparent => {
                     #[cfg(not(feature = "transparent-inputs"))]

@@ -272,20 +272,29 @@ impl ReceivedNote {
     }
 }
 
-impl From<ReceivedNote>
+impl TryFrom<ReceivedNote>
     for zcash_client_backend::wallet::ReceivedNote<NoteId, zcash_client_backend::wallet::Note>
 {
-    fn from(value: ReceivedNote) -> Self {
-        zcash_client_backend::wallet::ReceivedNote::from_parts(
+    type Error = Error;
+
+    /// Fails for a note whose key scope or commitment tree position is not yet known (one found
+    /// by decrypting an unmined transaction rather than by scanning), since the backend's note
+    /// type requires both.
+    fn try_from(value: ReceivedNote) -> Result<Self, Error> {
+        Ok(zcash_client_backend::wallet::ReceivedNote::from_parts(
             value.note_id,
             value.txid,
-            value.output_index.try_into().unwrap(),
+            value.output_index.try_into()?,
             value.note,
-            value.recipient_key_scope.unwrap(),
-            value.commitment_tree_position.unwrap(),
+            value
+                .recipient_key_scope
+                .ok_or(Error::Missing("recipient key scope".into()))?,
+            value
+                .commitment_tree_position
+                .ok_or(Error::Missing("commitment tree position".into()))?,
             None,
             None,
-        )
+        ))
     }
 }
 
@@ -717,7 +726,7 @@ mod tests {
 
 mod serialization {
     use super::*;
-    use crate::{proto::memwallet as proto, read_optional};
+    use crate::{error::proto_enum, proto::memwallet as proto, read_optional};
 
     impl From<ReceivedNote> for proto::ReceivedNote {
         fn from(value: ReceivedNote) -> Self {
@@ -749,16 +758,22 @@ mod serialization {
                 txid: read_optional!(value, tx_id)?.try_into()?,
                 output_index: value.output_index,
                 account_id: value.account_id.into(),
-                note: read_optional!(value, note)?.into(),
+                note: read_optional!(value, note)?.try_into()?,
                 nf: value.nullifier.map(|nf| nf.try_into()).transpose()?,
                 is_change: value.is_change,
                 memo: Memo::from_bytes(&value.memo)?,
                 commitment_tree_position: value.commitment_tree_position.map(|pos| pos.into()),
-                recipient_key_scope: match value.recipient_key_scope {
-                    Some(0) => Some(Scope::Internal),
-                    Some(1) => Some(Scope::External),
-                    _ => None,
-                },
+                recipient_key_scope: value
+                    .recipient_key_scope
+                    .map(|scope| {
+                        Ok::<_, Error>(
+                            match proto_enum::<proto::Scope>("recipient_key_scope", scope)? {
+                                proto::Scope::Internal => Scope::Internal,
+                                proto::Scope::External => Scope::External,
+                            },
+                        )
+                    })
+                    .transpose()?,
             })
         }
     }

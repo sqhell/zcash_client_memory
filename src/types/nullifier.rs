@@ -70,7 +70,7 @@ impl From<sapling::Nullifier> for Nullifier {
 
 mod serialization {
     use super::*;
-    use crate::{Error, proto::memwallet as proto};
+    use crate::{Error, error::proto_enum, proto::memwallet as proto};
 
     impl From<Nullifier> for proto::Nullifier {
         fn from(nullifier: Nullifier) -> Self {
@@ -103,7 +103,8 @@ mod serialization {
                     .into_option()
                     .ok_or(Error::CorruptedData("Invalid Orchard nullifier".into()))
             };
-            Ok(match nullifier.protocol() {
+            let protocol = proto_enum::<proto::ShieldedProtocol>("protocol", nullifier.protocol)?;
+            Ok(match protocol {
                 proto::ShieldedProtocol::Sapling => {
                     Nullifier::Sapling(sapling::Nullifier::from_slice(&nullifier.nullifier)?)
                 }

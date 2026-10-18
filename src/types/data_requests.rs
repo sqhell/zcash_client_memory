@@ -26,7 +26,11 @@ impl Deref for TransactionDataRequestQueue {
 
 mod serialization {
     use super::*;
-    use crate::{error::Error, proto::memwallet as proto, read_optional};
+    use crate::{
+        error::{Error, proto_enum},
+        proto::memwallet as proto,
+        read_optional,
+    };
 
     #[cfg(feature = "transparent-inputs")]
     use {
@@ -67,7 +71,11 @@ mod serialization {
         type Error = crate::Error;
 
         fn try_from(request: proto::TransactionDataRequest) -> Result<Self, crate::Error> {
-            Ok(match request.request_type() {
+            let request_type = proto_enum::<proto::TransactionDataRequestType>(
+                "request_type",
+                request.request_type,
+            )?;
+            Ok(match request_type {
                 proto::TransactionDataRequestType::GetStatus => {
                     TransactionDataRequest::GetStatus(read_optional!(request, tx_id)?.try_into()?)
                 }
@@ -93,7 +101,9 @@ mod serialization {
                     )
                 }
                 #[cfg(not(feature = "transparent-inputs"))]
-                _ => panic!("invalid request type"),
+                proto::TransactionDataRequestType::SpendsFromAddress => {
+                    return Err(Error::Other("transparent inputs not enabled".into()));
+                }
             })
         }
     }

@@ -20,11 +20,15 @@ pub(crate) fn shielded_protocol_for_value_pool(
 }
 
 mod serialization {
-    use crate::error::Error;
+    use crate::error::{Error, proto_enum};
     use crate::proto::memwallet::{self as proto};
     use crate::read_optional;
     use jubjub::Fr;
     use zcash_client_backend::wallet::{Note, NoteId};
+
+    fn corrupted(what: &str) -> Error {
+        Error::CorruptedData(what.to_owned())
+    }
 
     impl From<NoteId> for proto::NoteId {
         fn from(note_id: NoteId) -> Self {
@@ -56,9 +60,10 @@ mod serialization {
     impl TryFrom<proto::NoteId> for NoteId {
         type Error = Error;
         fn try_from(note_id: proto::NoteId) -> Result<Self, Self::Error> {
+            let pool = proto_enum::<proto::PoolType>("pool", note_id.pool)?;
             Ok(Self::new(
-                read_optional!(note_id.clone(), tx_id)?.try_into()?,
-                shielded_protocol_from_proto(note_id.pool())?,
+                read_optional!(note_id, tx_id)?.try_into()?,
+                shielded_protocol_from_proto(pool)?,
                 note_id.output_index.try_into()?,
             ))
         }
@@ -128,49 +133,60 @@ mod serialization {
         }
     }
 
-    impl From<proto::Note> for Note {
-        fn from(note: proto::Note) -> Self {
-            match note.protocol() {
+    impl TryFrom<proto::Note> for Note {
+        type Error = Error;
+
+        /// Rejects a note whose protocol is unknown, whose required fields are missing, or
+        /// whose bytes do not form a valid address, seed, or nullifier base. A wallet that
+        /// panicked here could never be loaded again; one that reported the error can be
+        /// restored from the chain.
+        fn try_from(note: proto::Note) -> Result<Self, Error> {
+            let protocol = proto_enum::<proto::ShieldedProtocol>("protocol", note.protocol)?;
+            match protocol {
                 proto::ShieldedProtocol::Sapling => {
                     let recipient =
-                        sapling::PaymentAddress::from_bytes(&note.recipient.try_into().unwrap())
-                            .unwrap();
+                        sapling::PaymentAddress::from_bytes(&note.recipient.try_into()?)
+                            .ok_or_else(|| corrupted("invalid Sapling payment address in note"))?;
                     let value = sapling::value::NoteValue::from_raw(note.value);
-                    let rseed = match note.rseed {
-                        Some(proto::RSeed {
-                            rseed_type: Some(0),
-                            payload,
-                        }) => sapling::Rseed::BeforeZip212(
-                            Fr::from_bytes(&payload.try_into().unwrap()).unwrap(),
+                    let rseed = read_optional!(note, rseed)?;
+                    let rseed_type = rseed
+                        .rseed_type
+                        .ok_or(Error::ProtoMissingField("rseed_type"))?;
+                    let rseed = match proto_enum::<proto::RSeedType>("rseed_type", rseed_type)? {
+                        proto::RSeedType::BeforeZip212 => sapling::Rseed::BeforeZip212(
+                            Fr::from_bytes(&rseed.payload.try_into()?)
+                                .into_option()
+                                .ok_or_else(|| corrupted("invalid pre-ZIP 212 rseed in note"))?,
                         ),
-                        Some(proto::RSeed {
-                            rseed_type: Some(1),
-                            payload,
-                        }) => sapling::Rseed::AfterZip212(payload.try_into().unwrap()),
-                        _ => panic!("rseed is required"),
+                        proto::RSeedType::AfterZip212 => {
+                            sapling::Rseed::AfterZip212(rseed.payload.try_into()?)
+                        }
                     };
-                    Self::Sapling(sapling::Note::from_parts(recipient, value, rseed))
+                    Ok(Self::Sapling(sapling::Note::from_parts(
+                        recipient, value, rseed,
+                    )))
                 }
                 #[cfg(feature = "orchard")]
-                protocol @ (proto::ShieldedProtocol::Orchard
-                | proto::ShieldedProtocol::Ironwood) => {
+                proto::ShieldedProtocol::Orchard | proto::ShieldedProtocol::Ironwood => {
                     let pool = match protocol {
                         proto::ShieldedProtocol::Ironwood => orchard::ValuePool::Ironwood,
                         _ => orchard::ValuePool::Orchard,
                     };
-                    let recipient = orchard::Address::from_raw_address_bytes(
-                        &note.recipient.try_into().unwrap(),
-                    )
-                    .unwrap();
+                    let recipient =
+                        orchard::Address::from_raw_address_bytes(&note.recipient.try_into()?)
+                            .into_option()
+                            .ok_or_else(|| corrupted("invalid Orchard address in note"))?;
                     let value = orchard::value::NoteValue::from_raw(note.value);
                     let rho =
-                        orchard::note::Rho::from_bytes(&note.rho.unwrap().try_into().unwrap())
-                            .unwrap();
+                        orchard::note::Rho::from_bytes(&read_optional!(note, rho)?.try_into()?)
+                            .into_option()
+                            .ok_or_else(|| corrupted("invalid rho in Orchard note"))?;
                     let rseed = orchard::note::RandomSeed::from_bytes(
-                        note.rseed.unwrap().payload.try_into().unwrap(),
+                        read_optional!(note, rseed)?.payload.try_into()?,
                         &rho,
                     )
-                    .unwrap();
+                    .into_option()
+                    .ok_or_else(|| corrupted("invalid rseed in Orchard note"))?;
                     // orchard 0.15 (NU6.3) adds a note-plaintext version: V2 = Orchard,
                     // V3 = Ironwood. Notes persisted before the version field existed are
                     // Orchard-pool notes, so they reconstruct as V2; Ironwood notes without the
@@ -178,17 +194,23 @@ mod serialization {
                     let version = match (note.note_version, pool) {
                         (Some(2), _) => orchard::note::NoteVersion::V2,
                         (Some(3), _) => orchard::note::NoteVersion::V3,
-                        (_, orchard::ValuePool::Orchard) => orchard::note::NoteVersion::V2,
-                        (_, orchard::ValuePool::Ironwood) => orchard::note::NoteVersion::V3,
+                        (Some(other), _) => {
+                            return Err(Error::CorruptedData(format!(
+                                "unknown Orchard note version {other}"
+                            )));
+                        }
+                        (None, orchard::ValuePool::Orchard) => orchard::note::NoteVersion::V2,
+                        (None, orchard::ValuePool::Ironwood) => orchard::note::NoteVersion::V3,
                     };
-                    Self::Orchard {
-                        note: orchard::Note::from_parts(recipient, value, rho, rseed, version)
-                            .unwrap(),
-                        pool,
-                    }
+                    let note = orchard::Note::from_parts(recipient, value, rho, rseed, version)
+                        .into_option()
+                        .ok_or_else(|| corrupted("Orchard note is not a valid note"))?;
+                    Ok(Self::Orchard { note, pool })
                 }
                 #[cfg(not(feature = "orchard"))]
-                _ => panic!("invalid protocol"),
+                proto::ShieldedProtocol::Orchard | proto::ShieldedProtocol::Ironwood => {
+                    Err(Error::OrchardNotEnabled)
+                }
             }
         }
     }
@@ -213,9 +235,85 @@ mod serialization {
             ));
 
             let proto_note: proto::Note = note.clone().into();
-            let recovered: Note = proto_note.into();
+            let recovered: Note = proto_note.try_into().unwrap();
 
             assert_eq!(note, recovered);
+        }
+
+        fn sapling_proto_note() -> proto::Note {
+            proto::Note {
+                protocol: proto::ShieldedProtocol::Sapling as i32,
+                recipient: vec![
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x8e,
+                    0x11, 0x9d, 0x72, 0x99, 0x2b, 0x56, 0x0d, 0x26, 0x50, 0xff, 0xe0, 0xbe, 0x7f,
+                    0x35, 0x42, 0xfd, 0x97, 0x00, 0x3c, 0xb7, 0xcc, 0x3a, 0xbf, 0xf8, 0x1a, 0x7f,
+                    0x90, 0x37, 0xf3, 0xea,
+                ],
+                value: 99,
+                rseed: Some(proto::RSeed {
+                    rseed_type: Some(proto::RSeedType::AfterZip212 as i32),
+                    payload: vec![0; 32],
+                }),
+                rho: None,
+                note_version: None,
+            }
+        }
+
+        #[test]
+        fn note_without_rseed_is_an_error() {
+            let proto_note = proto::Note {
+                rseed: None,
+                ..sapling_proto_note()
+            };
+            assert!(matches!(
+                Note::try_from(proto_note),
+                Err(Error::ProtoMissingField("rseed"))
+            ));
+        }
+
+        #[test]
+        fn note_with_unknown_rseed_type_is_an_error() {
+            let proto_note = proto::Note {
+                rseed: Some(proto::RSeed {
+                    rseed_type: Some(7),
+                    payload: vec![0; 32],
+                }),
+                ..sapling_proto_note()
+            };
+            assert!(matches!(
+                Note::try_from(proto_note),
+                Err(Error::UnknownEnumValue {
+                    field: "rseed_type",
+                    value: 7
+                })
+            ));
+        }
+
+        #[test]
+        fn note_with_unknown_protocol_is_an_error() {
+            let proto_note = proto::Note {
+                protocol: 42,
+                ..sapling_proto_note()
+            };
+            assert!(matches!(
+                Note::try_from(proto_note),
+                Err(Error::UnknownEnumValue {
+                    field: "protocol",
+                    value: 42
+                })
+            ));
+        }
+
+        #[test]
+        fn note_with_short_recipient_is_an_error() {
+            let proto_note = proto::Note {
+                recipient: vec![0; 10],
+                ..sapling_proto_note()
+            };
+            assert!(matches!(
+                Note::try_from(proto_note),
+                Err(Error::ByteVecToArrayConversion(_))
+            ));
         }
     }
 }
