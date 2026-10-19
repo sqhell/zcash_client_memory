@@ -91,7 +91,7 @@ impl ReceivedNote {
     pub fn account_id(&self) -> AccountId {
         self.account_id
     }
-    pub fn nullifier(&self) -> Option<&Nullifier> {
+    pub(crate) fn nullifier(&self) -> Option<&Nullifier> {
         self.nf.as_ref()
     }
     pub fn txid(&self) -> TxId {
@@ -272,6 +272,12 @@ impl From<ReceivedNote>
             None,
             None,
         )
+    }
+}
+
+impl Default for ReceivedNoteTable {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

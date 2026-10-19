@@ -99,11 +99,11 @@ mod serialization {
                                 read_optional!(note_id.clone(), tx_id)?.try_into()?,
                                 match note_id.pool() {
                                     proto::PoolType::ShieldedSapling => {
-                                        zcash_protocol::ShieldedProtocol::Sapling
+                                        zcash_protocol::ShieldedPool::Sapling
                                     }
                                     #[cfg(feature = "orchard")]
                                     proto::PoolType::ShieldedOrchard => {
-                                        zcash_protocol::ShieldedProtocol::Orchard
+                                        zcash_protocol::ShieldedPool::Orchard
                                     }
                                     _ => unreachable!(),
                                 },

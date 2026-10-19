@@ -12,7 +12,7 @@ use zcash_client_backend::{
 };
 use zcash_keys::address::Address;
 use zcash_protocol::{
-    ShieldedProtocol, TxId,
+    ShieldedPool, TxId,
     consensus::BlockHeight,
     local_consensus::LocalNetwork,
     value::{ZatBalance, Zatoshis},
@@ -196,7 +196,7 @@ where
 
     fn get_notes(
         &self,
-        protocol: zcash_protocol::ShieldedProtocol,
+        protocol: zcash_protocol::ShieldedPool,
     ) -> Result<Vec<ReceivedNote<NoteId, Note>>, Error> {
         Ok(self
             .received_notes
@@ -209,11 +209,7 @@ where
 
     /// Returns the note IDs for shielded notes sent by the wallet in a particular
     /// transaction.
-    fn get_sent_note_ids(
-        &self,
-        txid: &TxId,
-        protocol: ShieldedProtocol,
-    ) -> Result<Vec<NoteId>, Error> {
+    fn get_sent_note_ids(&self, txid: &TxId, protocol: ShieldedPool) -> Result<Vec<NoteId>, Error> {
         Ok(self
             .get_sent_notes()
             .keys()
@@ -317,7 +313,7 @@ where
                 .into_iter()
                 .find_map(identity)
                 .ok_or(Error::Other(
-                    format!("Account id could not be found for tx: {}", txid).to_string(),
+                    format!("Account id could not be found for tx: {txid}").to_string(),
                 ))?;
 
                 let balance_gained: u64 = received_notes
@@ -377,12 +373,12 @@ where
 
     fn get_checkpoint_history(
         &self,
-        protocol: &ShieldedProtocol,
+        protocol: &ShieldedPool,
     ) -> Result<Vec<(BlockHeight, Option<incrementalmerkletree::Position>)>, Error> {
         let mut checkpoints = Vec::new();
 
         match protocol {
-            ShieldedProtocol::Sapling => {
+            ShieldedPool::Sapling => {
                 self.sapling_tree
                     .store()
                     .for_each_checkpoint(usize::MAX, |id, cp| {
@@ -391,7 +387,7 @@ where
                     })?;
             }
             #[cfg(feature = "orchard")]
-            ShieldedProtocol::Orchard => {
+            ShieldedPool::Orchard => {
                 self.orchard_tree
                     .store()
                     .for_each_checkpoint(usize::MAX, |id, cp| {
@@ -402,7 +398,7 @@ where
             // The in-memory backend maintains no Ironwood (NU6.3) note commitment tree, so it has
             // no Ironwood checkpoint history to report.
             #[cfg(feature = "orchard")]
-            ShieldedProtocol::Ironwood => {}
+            ShieldedPool::Ironwood => {}
             #[cfg(not(feature = "orchard"))]
             _ => {}
         }

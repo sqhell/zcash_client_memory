@@ -19,20 +19,20 @@ mod serialization {
             Self {
                 tx_id: Some(note_id.txid().into()),
                 pool: match note_id.protocol() {
-                    zcash_protocol::ShieldedProtocol::Sapling => {
+                    zcash_protocol::ShieldedPool::Sapling => {
                         proto::PoolType::ShieldedSapling.into()
                     }
                     #[cfg(feature = "orchard")]
-                    zcash_protocol::ShieldedProtocol::Orchard => {
+                    zcash_protocol::ShieldedPool::Orchard => {
                         proto::PoolType::ShieldedOrchard.into()
                     }
                     #[cfg(not(feature = "orchard"))]
-                    zcash_protocol::ShieldedProtocol::Orchard => panic!(
+                    zcash_protocol::ShieldedPool::Orchard => panic!(
                         "Attempting to deserialize orchard supporting wallet using library built without orchard feature"
                     ),
                     // The in-memory backend does not scan or store Ironwood (NU6.3) notes, so no
                     // Ironwood NoteId is ever produced to be serialized here.
-                    zcash_protocol::ShieldedProtocol::Ironwood => {
+                    zcash_protocol::ShieldedPool::Ironwood => {
                         unreachable!("the in-memory backend does not track Ironwood notes")
                     }
                 },
@@ -47,9 +47,9 @@ mod serialization {
             Ok(Self::new(
                 read_optional!(note_id.clone(), tx_id)?.try_into()?,
                 match note_id.pool() {
-                    proto::PoolType::ShieldedSapling => zcash_protocol::ShieldedProtocol::Sapling,
+                    proto::PoolType::ShieldedSapling => zcash_protocol::ShieldedPool::Sapling,
                     #[cfg(feature = "orchard")]
-                    proto::PoolType::ShieldedOrchard => zcash_protocol::ShieldedProtocol::Orchard,
+                    proto::PoolType::ShieldedOrchard => zcash_protocol::ShieldedPool::Orchard,
                     _ => panic!("invalid pool"),
                 },
                 note_id.output_index.try_into()?,

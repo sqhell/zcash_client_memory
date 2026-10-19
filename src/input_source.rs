@@ -9,7 +9,7 @@ use zcash_client_backend::{
 };
 use zcash_primitives::transaction::Transaction;
 use zcash_protocol::{
-    ShieldedPool::{self as ShieldedProtocol, Sapling},
+    ShieldedPool::{self as ShieldedPool, Sapling},
     consensus::{self, BranchId},
     value::Zatoshis,
 };
@@ -37,7 +37,7 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
     fn get_spendable_note(
         &self,
         txid: &zcash_primitives::transaction::TxId,
-        protocol: zcash_protocol::ShieldedProtocol,
+        protocol: zcash_protocol::ShieldedPool,
         index: u32,
         target_height: TargetHeight,
     ) -> Result<
@@ -101,7 +101,7 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
         &self,
         account: Self::AccountId,
         target_value: TargetValue,
-        sources: &[zcash_protocol::ShieldedProtocol],
+        sources: &[zcash_protocol::ShieldedPool],
         target_height: TargetHeight,
         confirmations_policy: ConfirmationsPolicy,
         exclude: &[Self::NoteRef],
@@ -143,7 +143,7 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
     fn select_unspent_notes(
         &self,
         _account: Self::AccountId,
-        _sources: &[ShieldedProtocol],
+        _sources: &[ShieldedPool],
         _target_height: TargetHeight,
         _exclude: &[Self::NoteRef],
     ) -> Result<ReceivedNotes<Self::NoteRef>, Self::Error> {
@@ -181,7 +181,7 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
                 // non-coinbase and included, matching the SQL implementation's IFNULL(tx_index, 1)
                 // != 0 behavior.
                 CoinbaseFilter::NonCoinbaseOnly => {
-                    tx.map_or(true, |tx| tx.tx_index().unwrap_or(1) != 0)
+                    tx.is_none_or(|tx| tx.tx_index().unwrap_or(1) != 0)
                 }
             })
             .filter_map(|(outpoint, txo, tx)| {
@@ -229,7 +229,7 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
         );
 
         let sapling_pool_meta = self.spendable_notes_meta(
-            ShieldedProtocol::Sapling,
+            ShieldedPool::Sapling,
             account_id,
             selector,
             target_height,
@@ -239,7 +239,7 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
 
         #[cfg(feature = "orchard")]
         let orchard_pool_meta = self.spendable_notes_meta(
-            ShieldedProtocol::Orchard,
+            ShieldedPool::Orchard,
             account_id,
             selector,
             target_height,
@@ -253,7 +253,7 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
         // metadata query against the Ironwood value pool.
         #[cfg(feature = "orchard")]
         let ironwood_pool_meta = self.spendable_notes_meta(
-            ShieldedProtocol::Ironwood,
+            ShieldedPool::Ironwood,
             account_id,
             selector,
             target_height,
@@ -278,7 +278,7 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
         &self,
         account: AccountId,
         target_value: TargetValue,
-        pool: &zcash_protocol::ShieldedProtocol,
+        pool: &zcash_protocol::ShieldedPool,
         target_height: TargetHeight,
         confirmations_policy: ConfirmationsPolicy,
         exclude: &[NoteId],
@@ -385,7 +385,7 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
 
     fn spendable_notes_meta(
         &self,
-        protocol: ShieldedProtocol,
+        protocol: ShieldedPool,
         account: AccountId,
         filter: &NoteFilter,
         target_height: TargetHeight,

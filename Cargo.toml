@@ -26,7 +26,9 @@ tokio = {version = "1", features = ["sync"]}
 # Dependencies exposed in a public API:
 # (Breaking upgrades to these require a breaking upgrade to this crate.)
 # - Errors
-bip32 = {version = "=0.6.0-pre.1", default-features = false, features = ["alloc"], optional = true}
+# Unconditional: `zcash_transparent` already requires it, and the transparent output
+# serialization (which is not feature-gated) converts key scopes through `ChildNumber`.
+bip32 = {version = "=0.6.0-pre.1", default-features = false, features = ["alloc"]}
 zip32 = {version = "0.2", default-features = false}
 
 # - Logging and metrics
@@ -99,7 +101,6 @@ test-dependencies = [
 
 ## Enables receiving transparent funds and sending to transparent recipients
 transparent-inputs = [
-  "dep:bip32",
   "dep:secp256k1",
   "zcash_keys/transparent-inputs",
   "zcash_client_backend/transparent-inputs"

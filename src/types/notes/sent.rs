@@ -42,6 +42,12 @@ impl SentNoteId {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SentNoteTable(pub(crate) BTreeMap<SentNoteId, SentNote>);
 
+impl Default for SentNoteTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SentNoteTable {
     pub fn new() -> Self {
         Self(BTreeMap::new())
@@ -189,7 +195,7 @@ mod serialization {
     use super::*;
     use crate::{error::Error, proto::memwallet as proto, read_optional};
     use zcash_address::ZcashAddress;
-    use zcash_protocol::ShieldedProtocol;
+    use zcash_protocol::ShieldedPool;
 
     #[cfg(feature = "transparent-inputs")]
     use {
@@ -228,11 +234,11 @@ mod serialization {
                     tx_id: Some(note_id.txid().into()),
                     output_index: note_id.output_index().into(),
                     pool: match note_id.protocol() {
-                        ShieldedProtocol::Sapling => proto::PoolType::ShieldedSapling as i32,
-                        ShieldedProtocol::Orchard => proto::PoolType::ShieldedOrchard as i32,
+                        ShieldedPool::Sapling => proto::PoolType::ShieldedSapling as i32,
+                        ShieldedPool::Orchard => proto::PoolType::ShieldedOrchard as i32,
                         // The in-memory backend does not track Ironwood (NU6.3) notes, so no
                         // Ironwood sent-note id is ever produced.
-                        ShieldedProtocol::Ironwood => {
+                        ShieldedPool::Ironwood => {
                             unreachable!("the in-memory backend does not track Ironwood notes")
                         }
                     },
@@ -424,13 +430,13 @@ mod serialization {
         use super::*;
         use crate::proto::memwallet as proto;
 
-        use zcash_protocol::ShieldedProtocol;
+        use zcash_protocol::ShieldedPool;
 
         #[test]
         fn proto_roundtrip_recipient() {
             let recipient = Recipient::<AccountId>::External{
                 recipient_address: ZcashAddress::try_from_encoded("uregtest1a7mkafdn9c87xywjnyup65uker8tx3y72r9f6elcfm6uh263c9s6smcw6xm5m8k8eythcreuyqktp9z7mtpcd6jsm5xw7skgdcfjx84z").unwrap(),
-                output_pool: PoolType::Shielded(ShieldedProtocol::Sapling),
+                output_pool: PoolType::Shielded(ShieldedPool::Sapling),
         };
             let proto = proto::Recipient::from(recipient.clone());
             let recipient2 = Recipient::<AccountId>::try_from(proto.clone()).unwrap();
