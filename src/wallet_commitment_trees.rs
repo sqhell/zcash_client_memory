@@ -134,7 +134,10 @@ pub(crate) mod serialization {
             .iter()
             .map(|shard_root| {
                 let shard = tree.store().get_shard(*shard_root)?.ok_or_else(|| {
-                    Error::Other(format!("Missing shard for root index {}", shard_root.index()))
+                    Error::Other(format!(
+                        "Missing shard for root index {}",
+                        shard_root.index()
+                    ))
                 })?;
 
                 let mut shard_data = Vec::new();

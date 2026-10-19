@@ -890,8 +890,10 @@ mod serialization {
             let proto_acc: proto::Account = acc.clone().into();
 
             // Birthday should be present for valid accounts
-            assert!(proto_acc.birthday.is_some() || proto_acc.birthday.is_none(),
-                "Birthday field should serialize without panicking");
+            assert!(
+                proto_acc.birthday.is_some() || proto_acc.birthday.is_none(),
+                "Birthday field should serialize without panicking"
+            );
         }
 
         #[test]

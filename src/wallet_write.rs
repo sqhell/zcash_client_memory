@@ -43,8 +43,7 @@ use crate::{
 #[cfg(feature = "orchard")]
 use {
     shardtree::error::ShardTreeError, std::collections::BTreeMap,
-    zcash_client_backend::data_api::ORCHARD_SHARD_HEIGHT,
-    zcash_protocol::ShieldedPool::Orchard,
+    zcash_client_backend::data_api::ORCHARD_SHARD_HEIGHT, zcash_protocol::ShieldedPool::Orchard,
 };
 
 #[cfg(feature = "transparent-inputs")]
@@ -724,10 +723,8 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
                 }
                 TransferType::Incoming => {
                     // Store incoming Sapling note
-                    let received_note = ReceivedNote::from_decrypted_sapling_output(
-                        d_tx.tx().txid(),
-                        output,
-                    )?;
+                    let received_note =
+                        ReceivedNote::from_decrypted_sapling_output(d_tx.tx().txid(), output)?;
                     self.received_notes.insert_received_note(received_note);
                 }
                 TransferType::WalletInternal => unreachable!(
@@ -807,10 +804,8 @@ impl<P: consensus::Parameters> WalletWrite for MemoryWalletDb<P> {
                 }
                 TransferType::Incoming => {
                     // Store incoming Orchard note
-                    let received_note = ReceivedNote::from_decrypted_orchard_output(
-                        d_tx.tx().txid(),
-                        output,
-                    )?;
+                    let received_note =
+                        ReceivedNote::from_decrypted_orchard_output(d_tx.tx().txid(), output)?;
                     self.received_notes.insert_received_note(received_note);
                 }
                 TransferType::WalletInternal => unreachable!(

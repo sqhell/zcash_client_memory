@@ -7,15 +7,14 @@ use nonempty::NonEmpty;
 use secrecy::{ExposeSecret, SecretVec};
 use shardtree::store::ShardStore as _;
 use zcash_client_backend::data_api::{
-    AddressInfo, AddressSource, BlockMetadata, NullifierQuery, ReceivedTransactionOutput, WalletRead,
-    WalletSummary, Zip32Derivation, defaults,
+    AddressInfo, AddressSource, BlockMetadata, NullifierQuery, ReceivedTransactionOutput,
+    WalletRead, WalletSummary, Zip32Derivation, defaults,
     error::FindAccountForAddressError,
     scanning::ScanRange,
     wallet::{ConfirmationsPolicy, TargetHeight},
 };
 #[cfg(feature = "transparent-inputs")]
 use zcash_client_backend::data_api::{TransparentBalances, TransparentKeyOrigin};
-use zcash_keys::address::Address;
 use zcash_client_backend::{
     data_api::{
         Account as _, AccountBalance, AccountSource, Balance, Progress, Ratio, SeedRelevance,
@@ -24,6 +23,7 @@ use zcash_client_backend::{
     keys::{UnifiedAddressRequest, UnifiedFullViewingKey, UnifiedSpendingKey},
     wallet::NoteId,
 };
+use zcash_keys::address::Address;
 use zcash_keys::{address::UnifiedAddress, keys::UnifiedIncomingViewingKey};
 use zcash_primitives::{
     block::BlockHash,
@@ -224,12 +224,13 @@ impl<P: consensus::Parameters> WalletRead for MemoryWalletDb<P> {
                 continue;
             }
             // don't count notes in unscanned ranges
-            let in_unscanned = unscanned.iter().any(
-                |(_, _, start_position, end_position_exclusive)| {
-                    note.commitment_tree_position >= *start_position
-                        && note.commitment_tree_position < *end_position_exclusive
-                },
-            );
+            let in_unscanned =
+                unscanned
+                    .iter()
+                    .any(|(_, _, start_position, end_position_exclusive)| {
+                        note.commitment_tree_position >= *start_position
+                            && note.commitment_tree_position < *end_position_exclusive
+                    });
             if in_unscanned {
                 continue;
             }

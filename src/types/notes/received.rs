@@ -11,17 +11,15 @@ use zcash_primitives::transaction::TxId;
 use zcash_protocol::{PoolType, ShieldedPool::Sapling, memo::Memo};
 
 use zcash_client_backend::{
+    DecryptedOutput,
     data_api::{ReceivedNotes, SentTransactionOutput},
     wallet::{Note, NoteId, Recipient, WalletSaplingOutput},
-    DecryptedOutput,
 };
 
 use crate::AccountId;
 
 #[cfg(feature = "orchard")]
-use {
-    zcash_client_backend::wallet::WalletOrchardOutput, zcash_protocol::ShieldedPool::Orchard,
-};
+use {zcash_client_backend::wallet::WalletOrchardOutput, zcash_protocol::ShieldedPool::Orchard};
 
 use crate::{Nullifier, error::Error};
 
@@ -220,7 +218,7 @@ impl ReceivedNote {
             output_index: output.index() as u32,
             account_id: *output.account(),
             note: Note::Sapling(output.note().clone()),
-            nf: None, // Nullifier not yet known for incoming unspent notes
+            nf: None,         // Nullifier not yet known for incoming unspent notes
             is_change: false, // Incoming notes are not change
             memo,
             commitment_tree_position: None, // Position not yet known
@@ -251,7 +249,7 @@ impl ReceivedNote {
                 note: output.note().0,
                 pool: output.note().1,
             },
-            nf: None, // Nullifier not yet known for incoming unspent notes
+            nf: None,         // Nullifier not yet known for incoming unspent notes
             is_change: false, // Incoming notes are not change
             memo,
             commitment_tree_position: None, // Position not yet known
@@ -336,8 +334,9 @@ impl ReceivedNoteTable {
             let old_nf = existing.nf;
             existing.nf = note.nf.or(existing.nf);
             existing.is_change = note.is_change || existing.is_change;
-            existing.commitment_tree_position =
-                note.commitment_tree_position.or(existing.commitment_tree_position);
+            existing.commitment_tree_position = note
+                .commitment_tree_position
+                .or(existing.commitment_tree_position);
             // Update nullifier index if it changed
             if existing.nf != old_nf {
                 if let Some(old) = old_nf {
@@ -483,10 +482,9 @@ mod tests {
 
     /// Known-valid sapling PaymentAddress bytes (from mod.rs serialization test).
     const VALID_PA_BYTES: [u8; 43] = [
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x8e, 0x11,
-        0x9d, 0x72, 0x99, 0x2b, 0x56, 0x0d, 0x26, 0x50, 0xff, 0xe0, 0xbe, 0x7f, 0x35, 0x42,
-        0xfd, 0x97, 0x00, 0x3c, 0xb7, 0xcc, 0x3a, 0xbf, 0xf8, 0x1a, 0x7f, 0x90, 0x37, 0xf3,
-        0xea,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x8e, 0x11, 0x9d,
+        0x72, 0x99, 0x2b, 0x56, 0x0d, 0x26, 0x50, 0xff, 0xe0, 0xbe, 0x7f, 0x35, 0x42, 0xfd, 0x97,
+        0x00, 0x3c, 0xb7, 0xcc, 0x3a, 0xbf, 0xf8, 0x1a, 0x7f, 0x90, 0x37, 0xf3, 0xea,
     ];
 
     fn make_test_note(
@@ -503,9 +501,8 @@ mod tests {
             sapling::value::NoteValue::from_raw(1000),
             sapling::Rseed::AfterZip212([0; 32]),
         );
-        let nf = nullifier_bytes.map(|b| {
-            Nullifier::Sapling(sapling::Nullifier::from_slice(&[b; 32]).unwrap())
-        });
+        let nf = nullifier_bytes
+            .map(|b| Nullifier::Sapling(sapling::Nullifier::from_slice(&[b; 32]).unwrap()));
 
         ReceivedNote {
             note_id,

@@ -801,9 +801,9 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
                     // The in-memory backend scans only Sapling and Orchard outputs (see
                     // `note_positions` construction in `put_blocks`), so it never records an
                     // Ironwood (NU6.3) note position here.
-                    ShieldedProtocol::Ironwood => unreachable!(
-                        "the in-memory backend does not scan Ironwood note positions"
-                    ),
+                    ShieldedProtocol::Ironwood => {
+                        unreachable!("the in-memory backend does not scan Ironwood note positions")
+                    }
                 }
             }
 
@@ -892,9 +892,9 @@ impl<P: consensus::Parameters> MemoryWalletDb<P> {
                 }
                 // `extend_range` is only ever invoked for the Sapling and Orchard pools; the
                 // in-memory backend maintains no Ironwood (NU6.3) shard-end height map.
-                ShieldedProtocol::Ironwood => unreachable!(
-                    "extend_range is not invoked for the Ironwood pool"
-                ),
+                ShieldedProtocol::Ironwood => {
+                    unreachable!("extend_range is not invoked for the Ironwood pool")
+                }
             }
         };
 

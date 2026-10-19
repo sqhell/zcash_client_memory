@@ -232,9 +232,9 @@ mod serialization {
                         ShieldedProtocol::Orchard => proto::PoolType::ShieldedOrchard as i32,
                         // The in-memory backend does not track Ironwood (NU6.3) notes, so no
                         // Ironwood sent-note id is ever produced.
-                        ShieldedProtocol::Ironwood => unreachable!(
-                            "the in-memory backend does not track Ironwood notes"
-                        ),
+                        ShieldedProtocol::Ironwood => {
+                            unreachable!("the in-memory backend does not track Ironwood notes")
+                        }
                     },
                 },
                 SentNoteId::Transparent { txid, output_index } => proto::NoteId {

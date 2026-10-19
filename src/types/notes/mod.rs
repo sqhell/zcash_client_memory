@@ -1,9 +1,7 @@
 pub mod received;
 pub mod sent;
 
-pub(crate) use received::{
-    ReceievedNoteSpends, to_spendable_notes,
-};
+pub(crate) use received::{ReceievedNoteSpends, to_spendable_notes};
 pub use received::{ReceivedNote, ReceivedNoteTable};
 #[cfg(test)]
 pub(crate) use sent::SentNoteId;
@@ -34,9 +32,9 @@ mod serialization {
                     ),
                     // The in-memory backend does not scan or store Ironwood (NU6.3) notes, so no
                     // Ironwood NoteId is ever produced to be serialized here.
-                    zcash_protocol::ShieldedProtocol::Ironwood => unreachable!(
-                        "the in-memory backend does not track Ironwood notes"
-                    ),
+                    zcash_protocol::ShieldedProtocol::Ironwood => {
+                        unreachable!("the in-memory backend does not track Ironwood notes")
+                    }
                 },
                 output_index: u32::from(note_id.output_index()),
             }

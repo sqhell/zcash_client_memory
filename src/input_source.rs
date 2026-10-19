@@ -49,9 +49,10 @@ impl<P: consensus::Parameters> InputSource for MemoryWalletDb<P> {
         >,
         Self::Error,
     > {
-        let note = self.received_notes.iter().find(|rn| {
-            &rn.txid == txid && rn.note.pool() == protocol && rn.output_index == index
-        });
+        let note = self
+            .received_notes
+            .iter()
+            .find(|rn| &rn.txid == txid && rn.note.pool() == protocol && rn.output_index == index);
 
         Ok(if let Some(note) = note {
             if self.note_is_spent(note, target_height)? {
