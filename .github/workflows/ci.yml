@@ -55,8 +55,10 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      # gcc-multilib provides the 32-bit glibc headers that secp256k1-sys's C build
+      # needs when clang targets wasm32 (upstream librustzcash installs the same).
+      - name: Install protoc and wasm build dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler gcc-multilib
       - name: Add target
         run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
