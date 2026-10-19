@@ -15,7 +15,7 @@ use zcash_protocol::{
 use crate::{
     Error, MemoryWalletDb, PRUNING_DEPTH,
     proto::memwallet as proto,
-    testing::{MemBlockCache, TestMemDbFactory},
+    testing::{MemBlockCache, SharedBlockCache, TestMemDbFactory},
     types::ScanCounts,
 };
 
@@ -566,14 +566,18 @@ pub(crate) fn truncate_drops_nullifier_map_entries_above_the_height<T: ShieldedP
 type Nf<T> = <<T as ShieldedPoolTester>::Fvk as TestFvk>::Nullifier;
 
 /// The harness state the block-pruning tests drive.
-type MemTestState = TestState<MemBlockCache, MemoryWalletDb<LocalNetwork>, LocalNetwork>;
+type PruningTestState = TestState<SharedBlockCache, MemoryWalletDb<LocalNetwork>, LocalNetwork>;
 
-fn pruning_test_state() -> MemTestState {
-    TestBuilder::new()
+/// A harness state for the pruning tests, together with a handle on its block cache so that a
+/// second wallet can scan the same blocks (see [`scan_twin_from_birthday`]).
+fn pruning_test_state() -> (PruningTestState, SharedBlockCache) {
+    let cache = SharedBlockCache::new();
+    let st = TestBuilder::new()
         .with_data_store_factory(TestMemDbFactory::new())
-        .with_block_cache(MemBlockCache::new())
+        .with_block_cache(cache.clone())
         .with_account_from_sapling_activation(BlockHash([0; 32]))
-        .build()
+        .build();
+    (st, cache)
 }
 
 /// Generates `count` blocks after the current tip, each carrying one output. The outputs at the
@@ -581,7 +585,7 @@ fn pruning_test_state() -> MemTestState {
 /// not hold, so every block adds a note commitment (and a tree checkpoint) without wallet
 /// activity. Returns the heights of the wallet's outputs.
 fn generate_blocks<T: ShieldedPoolTester>(
-    st: &mut MemTestState,
+    st: &mut PruningTestState,
     count: u32,
     wallet_outputs: &[u32],
 ) -> Vec<BlockHeight> {
@@ -603,7 +607,7 @@ fn generate_blocks<T: ShieldedPoolTester>(
 /// A second wallet holding the harness account, which never prunes its block records. It scans
 /// the harness's block cache through the backend directly (see [`scan_twin_from_birthday`]), so
 /// it sees exactly the blocks the harness wallet does.
-fn unpruned_twin(st: &MemTestState) -> MemoryWalletDb<LocalNetwork> {
+fn unpruned_twin(st: &PruningTestState) -> MemoryWalletDb<LocalNetwork> {
     let mut twin = MemoryWalletDb::new(*st.network(), 100);
     twin.defer_block_pruning = true;
     let birthday = st.test_account().unwrap().birthday().clone();
@@ -615,14 +619,15 @@ fn unpruned_twin(st: &MemTestState) -> MemoryWalletDb<LocalNetwork> {
 /// Scans `limit` blocks of the harness's cache into `wallet`, starting at the wallet birthday
 /// from the same empty chain state the harness starts its own wallet from.
 fn scan_twin_from_birthday(
-    st: &MemTestState,
+    st: &PruningTestState,
+    cache: &SharedBlockCache,
     wallet: &mut MemoryWalletDb<LocalNetwork>,
     limit: usize,
 ) {
     let birthday = st.sapling_activation_height();
     chain::scan_cached_blocks(
         st.network(),
-        st.cache(),
+        cache,
         wallet,
         birthday,
         &ChainState::empty(birthday - 1, BlockHash([0; 32])),
@@ -676,14 +681,14 @@ fn scan_progress(
 /// scan queue a rewind leaves behind. A wallet that prunes as it scans is compared with a twin
 /// that never prunes.
 pub(crate) fn prune_preserves_reads<T: ShieldedPoolTester>() {
-    let mut st = pruning_test_state();
+    let (mut st, cache) = pruning_test_state();
     let birthday = st.sapling_activation_height();
     let tx_heights = generate_blocks::<T>(&mut st, 300, &[5, 120, 250]);
     st.scan_cached_blocks(birthday, 300);
     let max = birthday + 299;
 
     let mut unpruned = unpruned_twin(&st);
-    scan_twin_from_birthday(&st, &mut unpruned, 300);
+    scan_twin_from_birthday(&st, &cache, &mut unpruned, 300);
     assert_eq!(unpruned.blocks.len(), 300);
     assert!(
         st.wallet().blocks.len() < 300,
@@ -767,7 +772,7 @@ pub(crate) fn prune_preserves_reads<T: ShieldedPoolTester>() {
 /// The scan counters a prune computes equal the per-block sums over the records it drops, and
 /// the scanned totals the progress estimate uses are the same before and after the prune.
 pub(crate) fn prune_counters_match_block_sums<T: ShieldedPoolTester>() {
-    let mut st = pruning_test_state();
+    let (mut st, _) = pruning_test_state();
     st.wallet_mut().defer_block_pruning = true;
     let birthday = st.sapling_activation_height();
     generate_blocks::<T>(&mut st, 300, &[7, 200]);
@@ -814,7 +819,7 @@ pub(crate) fn prune_counters_match_block_sums<T: ShieldedPoolTester>() {
 /// scanning straight through: the dropped records lie above the counted run, so the counters
 /// need no correction.
 pub(crate) fn scan_counters_survive_truncation<T: ShieldedPoolTester>() {
-    let mut st = pruning_test_state();
+    let (mut st, cache) = pruning_test_state();
     let birthday = st.sapling_activation_height();
     generate_blocks::<T>(&mut st, 300, &[10, 150]);
     st.scan_cached_blocks(birthday, 300);
@@ -828,7 +833,7 @@ pub(crate) fn scan_counters_survive_truncation<T: ShieldedPoolTester>() {
 
     let mut straight = unpruned_twin(&st);
     straight.defer_block_pruning = false;
-    scan_twin_from_birthday(&st, &mut straight, 350);
+    scan_twin_from_birthday(&st, &cache, &mut straight, 350);
 
     let rewound = st.wallet();
     assert!(rewound.scan_counters.is_some());
@@ -849,7 +854,7 @@ pub(crate) fn scan_counters_survive_truncation<T: ShieldedPoolTester>() {
 /// exactly the bytes of a wallet that pruned as it scanned. The migrated blob decodes without
 /// pruning again.
 pub(crate) fn pre_pruning_wallet_is_migrated_on_decode<T: ShieldedPoolTester>() {
-    let mut st = pruning_test_state();
+    let (mut st, cache) = pruning_test_state();
     let birthday = st.sapling_activation_height();
     generate_blocks::<T>(&mut st, 300, &[30, 260]);
     st.scan_cached_blocks(birthday, 300);
@@ -859,7 +864,7 @@ pub(crate) fn pre_pruning_wallet_is_migrated_on_decode<T: ShieldedPoolTester>() 
     // The twin never pruned, so its encoding is what this crate wrote before block pruning:
     // every block record and no counters.
     let mut legacy = unpruned_twin(&st);
-    scan_twin_from_birthday(&st, &mut legacy, 300);
+    scan_twin_from_birthday(&st, &cache, &mut legacy, 300);
     assert!(legacy.scan_counters.is_none());
     let legacy_bytes = legacy.encode_to_vec().unwrap();
     let legacy_proto = proto::MemoryWallet::decode(&legacy_bytes[..]).unwrap();
@@ -884,7 +889,7 @@ pub(crate) fn pre_pruning_wallet_is_migrated_on_decode<T: ShieldedPoolTester>() 
 /// After scanning a long run of blocks without wallet activity, only the rewind window and the
 /// birthday block remain, whatever the number of blocks scanned.
 pub(crate) fn pruned_block_table_stays_small<T: ShieldedPoolTester>() {
-    let mut st = pruning_test_state();
+    let (mut st, _) = pruning_test_state();
     let birthday = st.sapling_activation_height();
     generate_blocks::<T>(&mut st, 1_000, &[]);
     for batch in 0..10u32 {

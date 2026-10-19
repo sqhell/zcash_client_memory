@@ -1,10 +1,12 @@
 use std::convert::{Infallible, identity};
 use std::fmt::Debug;
+use std::sync::Arc;
 
 use zcash_client_backend::data_api::testing::CacheInsertionResult;
 use zcash_client_backend::{
     data_api::{
         OutputOfSentTx, SAPLING_SHARD_HEIGHT, WalletTest,
+        chain::{BlockSource, error::Error as ChainError},
         testing::{DataStoreFactory, Reset, TestCache, TestState},
     },
     proto::compact_formats::CompactBlock,
@@ -94,6 +96,54 @@ impl TestCache for MemBlockCache {
 
     fn truncate_to_height(&mut self, height: BlockHeight) {
         self.0.write().unwrap().retain(|k, _| *k <= height);
+    }
+}
+
+/// A [`MemBlockCache`] behind an `Arc`, so that a test can hand the harness its block cache and
+/// keep a handle on the same blocks. The harness's own `cache()` accessor is only available
+/// behind the backend's `unstable` feature, which the default feature set does not enable.
+#[derive(Clone, Default)]
+pub(crate) struct SharedBlockCache(Arc<MemBlockCache>);
+
+impl SharedBlockCache {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl BlockSource for SharedBlockCache {
+    type Error = Infallible;
+
+    fn with_blocks<F, WalletErrT>(
+        &self,
+        from_height: Option<BlockHeight>,
+        limit: Option<usize>,
+        with_block: F,
+    ) -> Result<(), ChainError<WalletErrT, Self::Error>>
+    where
+        F: FnMut(CompactBlock) -> Result<(), ChainError<WalletErrT, Self::Error>>,
+    {
+        self.0.with_blocks(from_height, limit, with_block)
+    }
+}
+
+impl TestCache for SharedBlockCache {
+    type BsError = Infallible;
+    type BlockSource = SharedBlockCache;
+    type InsertResult = MemBlockCacheInsertionResult;
+
+    fn block_source(&self) -> &Self::BlockSource {
+        self
+    }
+
+    fn insert(&mut self, cb: &CompactBlock) -> Self::InsertResult {
+        let txids = cb.vtx.iter().map(|tx| tx.txid()).collect();
+        self.0.0.write().unwrap().insert(cb.height(), cb.clone());
+        MemBlockCacheInsertionResult { txids }
+    }
+
+    fn truncate_to_height(&mut self, height: BlockHeight) {
+        self.0.0.write().unwrap().retain(|k, _| *k <= height);
     }
 }
 
